@@ -1,0 +1,27 @@
+name: napari-ants-plugin
+version: 0.1.0
+display_name: ANTs Plugin
+description: A Napari plugin for aligning and transforming images using ANTsPy.
+author: Chen Yang
+email: healthonrails@gmail.com
+license: MIT
+url: https://github.com/healthonrails/napari_ants_plugin
+
+
+contributions:
+  commands:
+    - id: napari-ants-plugin.main
+      title: Napari ANTs Plugin
+      python_name: napari_ants_plugin.main
+  widgets:
+    - command: napari_ants_plugin.image_alignment
+      display_name: Image Alignment
+      autogenerate: true
+    - command: napari_ants_plugin.image_transformation
+      display_name: Image Transformation
+      autogenerate: true
+
+
+# Optional fields
+homepage: https://github.com/healthonrails/napari_ants_plugin
+documentation: https://github.com/healthonrails/napari_ants_plugin/blob/main/README.md

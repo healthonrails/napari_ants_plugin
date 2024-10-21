@@ -1,0 +1,41 @@
+# Python bytecode files
+*.pyc
+*.pyo
+__pycache__
+
+# Virtual environment directories
+venv/
+env/
+.venv/
+.virtualenv/
+ENV/
+env.bak/
+
+# Distribution / packaging
+*.egg-info/
+dist/
+build/
+eggs/
+*.egg
+
+# PyInstaller
+*.manifest
+*.spec
+
+# VS Code settings
+.vscode/
+
+# macOS system files
+.DS_Store
+
+# Logs
+*.log
+
+# Napari plugin cache
+napari-plugin.json
+
+# Temporary files
+*.swp
+*.swo
+*.bak
+*.tmp
