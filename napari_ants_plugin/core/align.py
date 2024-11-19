@@ -1,6 +1,7 @@
+import os
 import ants
 import numpy as np
-from .utils import create_result_directory
+from .utils import create_result_directory,save_aligned_image
 
 def align_images(fixed_image: np.ndarray, moving_image: np.ndarray, result_dir: str = None, transform_type: str = 'SyNRA', **kwargs) -> np.ndarray:
     """Align two images using ANTs.
@@ -31,5 +32,10 @@ def align_images(fixed_image: np.ndarray, moving_image: np.ndarray, result_dir: 
     # Perform alignment using ANTs
     result = ants.registration(fixed, moving, type_of_transform=transform_type, outprefix=result_dir, **kwargs)
 
+
+    output_path = os.path.join(result_dir, "aligned_image.tif")
+    aligned_image = result['warpedmovout'].numpy()
+    save_aligned_image(aligned_image, output_path)
+
     # Return the warped moving image as an ndarray
-    return result['warpedmovout'].numpy()
+    return aligned_image
