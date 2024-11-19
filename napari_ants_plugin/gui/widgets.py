@@ -6,6 +6,7 @@ from napari.types import LayerDataTuple
 from napari import Viewer
 from skimage.io import imread
 import os
+from ..core.utils import log_score
 
 @magic_factory(call_button="Align Images",
                fixed_image_path={"widget_type": "FileEdit", "label": "Fixed Image File"},
@@ -78,3 +79,40 @@ def image_transformation_widget(viewer: Viewer,
 
     # Return the transformed image as a new layer
     return (transformed_image, {"name": "Transformed Image"})
+
+
+@magic_factory(call_button="Submit Score",
+               aligned_image_path={"widget_type": "FileEdit", "label": "Aligned Image Path"})
+def scoring_widget(viewer: Viewer, 
+                   aligned_image_path: str = '',
+                   score: int = 0, 
+                   comments: str = '') -> None:
+    """Widget for scoring registration results."""
+    
+    # Check if the aligned image is already in the viewer
+    aligned_image_layer = None
+    for layer in viewer.layers:
+        if layer.name == "Aligned Image":
+            aligned_image_layer = layer
+            break
+
+    # If no aligned image is in the viewer, load from the provided path
+    if aligned_image_layer is None:
+        if not aligned_image_path:
+            raise ValueError("No 'Aligned Image' found in the viewer. Please provide a path to load one.")
+        
+        if not os.path.exists(aligned_image_path):
+            raise FileNotFoundError(f"Aligned image file not found: {aligned_image_path}")
+        
+        # Load the aligned image from the specified path into the viewer
+        aligned_image_data = imread(aligned_image_path)
+        
+        # Add the aligned image to the viewer as a new layer
+        aligned_image_layer = viewer.add_image(aligned_image_data, name="Aligned Image")
+
+    # Ensure the score is within the valid range
+    if not (0 <= score <= 10):
+        raise ValueError("Score must be between 0 and 10.")
+
+    # Log the score and comments
+    log_score(aligned_image_layer.name, score, comments)
