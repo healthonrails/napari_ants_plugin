@@ -187,7 +187,6 @@ class ObjectCounter:
         Returns:
             A list of detected bounding boxes in x1,y1,x2,y2 format.
         """
-        print("--- Inside ObjectCounter.count_objects ---")
         if isinstance(image, str):
             image_pil = Image.open(image).convert("RGB")
         elif isinstance(image, Image.Image):

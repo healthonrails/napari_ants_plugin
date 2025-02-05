@@ -1,4 +1,5 @@
-from magicgui import magic_factory
+from magicgui import magic_factory, widgets
+from magicgui.widgets import PushButton, Image as ImageWidget
 from napari.layers import Image, Shapes, Points
 from napari.types import LayerDataTuple
 from napari import Viewer
@@ -13,79 +14,92 @@ from ..core.transform import transform_image  # noqa: F401 (if used elsewhere)
 from ..core.utils import log_score  # noqa: F401 (if used elsewhere)
 from ..core.labeling import generate_countgd_labels  # noqa: F401 (if used - important for CountGD)
 
-
 # Globals
 label_layer = None
 current_label_type = None
+exemplar_shapes_layer = None  # Stores the shapes layer for exemplar bbox drawing
+
+
+# Function to normalize shapes and convert to bbox
+def normalize_shapes_and_get_bboxes(shapes, img_width, img_height):
+    normalized_bboxes = []
+
+    for shape in shapes:
+        # Extract x and y coordinates from the shape
+        # X is the second column (since Napari uses (Y, X) format)
+        x_coords = shape[:, 1]
+        y_coords = shape[:, 0]  # Y is the first column
+
+        # Get bounding box coordinates (min and max)
+        xmin = np.min(x_coords) / img_width
+        ymin = np.min(y_coords) / img_height
+        xmax = np.max(x_coords) / img_width
+        ymax = np.max(y_coords) / img_height
+
+        # Append normalized bbox [xmin, ymin, xmax, ymax]
+        normalized_bboxes.append([xmin, ymin, xmax, ymax])
+
+    return normalized_bboxes
 
 
 @magic_factory(
     call_button="Run CountGD",
-    label_type={"choices": ['points', 'bboxes'], "label": "Label Type"}
+    label_type={"choices": ['points', 'bboxes'], "label": "Label Type"},
+    text_prompt={"label": "Object Caption", "value": "cell"},
 )
-def run_countgd_widget(viewer: Viewer, label_type: str, caption: str = "cell", exemplar_image=None, exemplar_points=None):
+def run_countgd_widget(
+    viewer: Viewer,
+    label_type: str,
+    text_prompt: str,
+):
     """
-    Widget to run CountGD on the visible portion of the current image layer.
+    Plugin to run CountGD on the visible portion of the active image.
 
-    This version is compatible with older napari versions but uses a deprecated method
-    to get canvas size.  For napari >= 0.6.0, consider using viewer.camera.rect instead.
+    Features:
+      - Extracts the visible region of the active image (using camera center, zoom, and canvas size).
+      - Allows users to optionally draw one or more exemplar bounding boxes on the image.
+        When the "Draw Exemplar BBox" button is clicked, the shapes layer enters drawing mode.
+        Users can draw and adjust rectangles; their normalized coordinates are computed and stored.
+      - The counting function is called using the visible image and the provided caption.
+        If exemplars are drawn, they are used; otherwise, the count runs using text only.
+      - Detected points or bounding boxes are overlaid on the image.
     """
-    global label_layer, current_label_type
+    global label_layer, current_label_type, exemplar_shapes_layer
     current_label_type = label_type
+    # Will hold a list of normalized exemplar boxes (or remain None)
+    exemplar_points = None
 
-    # Ensure an image layer is selected
+    # Ensure an image layer is selected.
     if not viewer.layers.selection:
         return "No image layer selected in Napari."
-
     image_layer_select = viewer.layers.selection.active
-
     if not isinstance(image_layer_select, Image):
         print(type(image_layer_select), 'Selected layer is not an image layer.')
         return "Selected layer is not an image layer."
 
     try:
-        # --- Get Visible Region Using Camera Position and Zoom (DEPRECATED METHOD) ---
-        # WARNING: Accessing private attribute '_qt_viewer' is deprecated and will be removed in napari 0.6.0!
-        # For napari 0.6.0 and later, use 'viewer.camera.rect' instead.
-        # This method is used for compatibility with older napari versions.
-        canvas_size = viewer.window._qt_viewer.canvas.size
-        canvas_width, canvas_height = canvas_size[0], canvas_size[1]
+        visible_image = image_layer_select.data
 
-        camera_center = np.array(viewer.camera.center)[:2]
-        zoom = viewer.camera.zoom
-
-        visible_width = canvas_width / zoom
-        visible_height = canvas_height / zoom
-
-        # Calculate visible region boundaries
-        min_x = int(camera_center[0] - visible_width / 2)
-        max_x = int(camera_center[0] + visible_width / 2)
-        min_y = int(camera_center[1] - visible_height / 2)
-        max_y = int(camera_center[1] + visible_height / 2)
-
-        # Clip coordinates to image boundaries
-        img_shape = np.array(image_layer_select.data.shape[:2])
-        min_x, max_x = np.clip([min_x, max_x], 0, img_shape[1])
-        min_y, max_y = np.clip([min_y, max_y], 0, img_shape[0])
-
-        # Extract the visible image region
-        visible_image = image_layer_select.data[min_y:max_y, min_x:max_x]
-
-        print("Visible scene image shape:", visible_image.shape)
+        # Access the shapes layer by name
+        shapes_layer = viewer.layers['Shapes']
+        exemplar_points = normalize_shapes_and_get_bboxes(
+            shapes_layer.data, visible_image.shape[1], visible_image.shape[0])
 
         # --- Call the Counting Function ---
-        labels, label_type_returned = generate_countgd_labels(  # Assuming this function is defined elsewhere
+        labels, label_type_returned = generate_countgd_labels(
             visible_image,
-            label_type=current_label_type
+            label_type=current_label_type,
+            text_prompt=text_prompt,
+            exemplar_image=None,  # Pass PIL Image
+            # May be None if no boxes are drawn.
+            exemplar_points=exemplar_points
         )
-
         # --- Display the Generated Labels ---
         if label_type_returned == 'points':
-            points = labels[:, :2] + np.array([min_x, min_y])
-
+            # For a 2D image, offset returned points by the visible region's top-left.
+            points = labels[:, :2]
             if label_layer is not None and isinstance(label_layer, Points):
                 viewer.layers.remove(label_layer)
-
             label_layer = viewer.add_points(
                 data=points,
                 name='CountGD Points',
@@ -96,20 +110,17 @@ def run_countgd_widget(viewer: Viewer, label_type: str, caption: str = "cell", e
         elif label_type_returned == 'bboxes':
             if label_layer is not None and isinstance(label_layer, Shapes):
                 viewer.layers.remove(label_layer)
-
             bbox_shapes_data = []
             for bbox in labels:
                 min_b, max_b = bbox
-                min_b[:2] += [min_x, min_y]
-                max_b[:2] += [min_x, min_y]
-                bbox_shapes_data.append([min_b, max_b])
-
+                bbox_shapes_data.append([[min_b[0], max_b[0]], [min_b[1], max_b[0]], [
+                                        min_b[1], max_b[1]], [min_b[0], max_b[1]]])
             label_layer = viewer.add_shapes(
                 bbox_shapes_data,
                 shape_type='rectangle',
                 name='CountGD BBoxes',
                 edge_color='cyan',
-                face_color=(0, 1, 1, 0.2)
+                face_color='transparent',
             )
         else:
             raise ValueError("Invalid label type returned from CountGD.")
