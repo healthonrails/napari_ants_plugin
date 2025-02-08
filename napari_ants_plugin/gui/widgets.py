@@ -73,8 +73,9 @@ def crop_shapes_from_image(image, labeled_shapes,min_clip_value=0,max_clip_value
                 return [] # Return empty list if image dimensions are wrong
 
             cropped_image.clip(min_clip_value,max_clip_value)
-            cropped_image = cropped_image / cropped_image.max()
-            cropped_image = cropped_image * 255
+            if cropped_image.max() > 0:
+                cropped_image = cropped_image / cropped_image.max()
+                cropped_image = cropped_image * 255
             cropped_images.append(cropped_image)
 
     except Exception as e:
@@ -111,13 +112,13 @@ def normalize_shapes_and_get_bboxes(shapes, img_width, img_height):
     call_button="Run CountGD",
     label_type={"choices": ['points', 'bboxes'], "label": "Label Type"},
     text_prompt={"label": "Object Caption", "value": "cell"},
-    confidence_threshold={"label":"Confidence Threshold", "value": 0.23}
+    confidence_threshold={"label":"Confidence Threshold", "value": 0.01}
 )
 def run_countgd_widget(
     viewer: Viewer,
     label_type: str,
     text_prompt: str,
-    confidence_threshold: float = 0.23,
+    confidence_threshold: float = 0.01,
 ):
     """
     Plugin to run CountGD on the visible portion of the active image.
@@ -180,7 +181,7 @@ def run_countgd_widget(
             overlap = (16, 16)        # (height, width)
             stride = (tile_size[0] - overlap[0], tile_size[1] - overlap[1])
             
-            for z in range(1051,z_slices):
+            for z in range(z_slices):
                 slice_data = visible_image[z]
                 print(slice_data.shape, "Current slice number:", z)
                 # Loop over tiles
@@ -236,7 +237,7 @@ def run_countgd_widget(
                             processed_tile,
                             label_type=current_label_type,
                             text_prompt=text_prompt,
-                            exemplar_image=None if len(cropped_examplar_imgs) < 1 else cropped_examplar_imgs[0],
+                            exemplar_image=None,# if len(cropped_examplar_imgs) < 1 else cropped_examplar_imgs[0],
                             exemplar_points=tile_exemplar_points,
                             offset_x=x,
                             offset_y=y,
