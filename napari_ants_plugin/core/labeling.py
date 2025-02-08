@@ -16,6 +16,7 @@ def generate_countgd_labels(image_roi, label_type='points',
                             offset_x=0,
                             offset_y=0,
                             z_slice = None,
+                            confidence_threshold=0.23,
                             ):
     """
     Generates CountGD labels (points or bounding boxes) using the ObjectCounter model.
@@ -96,7 +97,7 @@ def generate_countgd_labels(image_roi, label_type='points',
             text_prompt=text_prompt,
             exemplar_image=exemplar_image_pil,
             exemplar_boxes=exemplar_boxes_normalized,
-            confidence_threshold=0.01,  # Adjust threshold as needed.
+            confidence_threshold=confidence_threshold,  # Adjust threshold as needed.
             # Using text_prompt as keywords for filtering.
             keywords=text_prompt
         )
