@@ -18,11 +18,76 @@ from ..core.labeling import generate_countgd_labels  # noqa: F401 (if used - imp
 label_layer = None
 current_label_type = None
 exemplar_shapes_layer = None  # Stores the shapes layer for exemplar bbox drawing
+large_image_size  = (100,100,100)
+
+
+
+def crop_shapes_from_image(image, labeled_shapes):
+    """
+    Crops regions from an image based on labeled shapes.
+    Coordinates in labeled_shapes are assumed to be in Z, Y, X format.
+
+    Args:
+        image (np.ndarray): The large image to crop from (assuming it's a NumPy array, could be 2D or 3D).
+        labeled_shapes (list of np.ndarray): A list where each np.ndarray represents a shape.
+                                             Each shape array is expected to be in the format:
+                                             [[z1, y1, x1], [z2, y2, x2], ..., [zn, yn, xn]].
+
+    Returns:
+        list of np.ndarray: A list of cropped image regions, one for each shape.
+                            Returns an empty list if there are no shapes or an error occurs.
+    """
+    cropped_images = []
+    if not labeled_shapes:
+        print("No shapes provided to crop.")
+        return cropped_images
+
+    try:
+        for shape in labeled_shapes:
+            # Extract z, y, and x coordinates from the shape (Z, Y, X format)
+            z_coords = shape[:, 0]
+            y_coords = shape[:, 1]
+            x_coords = shape[:, 2]
+
+            # Get bounding box coordinates (min and max) for x and y
+            xmin = int(np.min(x_coords))
+            ymin = int(np.min(y_coords))
+            xmax = int(np.max(x_coords))
+            ymax = int(np.max(y_coords))
+
+            # Determine z-slice to use (using min z for simplicity)
+            z_slice = int(np.min(z_coords))
+
+            # Handle potential 2D or 3D image input
+            if image.ndim == 2:
+                cropped_image = image[ymin:ymax, xmin:xmax]
+            elif image.ndim == 3:
+                # Assuming the image is (Z, Y, X) or similar - adjust if your image dimension order is different
+                if z_slice < image.shape[0]: # Check if z_slice is within image bounds
+                    cropped_image = image[z_slice, ymin:ymax, xmin:xmax]
+                else:
+                    print(f"Warning: z_slice {z_slice} is out of bounds for image with shape {image.shape}. Skipping crop for this shape.")
+                    continue # Skip to the next shape if z_slice is invalid
+            else:
+                print(f"Error: Image has unsupported dimensions ({image.ndim}). Expecting 2D or 3D.")
+                return [] # Return empty list if image dimensions are wrong
+
+            cropped_image.clip(0,8000)
+            cropped_image = cropped_image / cropped_image.max()
+            cropped_image = cropped_image * 255
+            cropped_images.append(cropped_image)
+
+    except Exception as e:
+        print(f"Error during cropping: {e}")
+        return [] # Return empty list if any error occurs during processing
+
+    return cropped_images
 
 
 # Function to normalize shapes and convert to bbox
 def normalize_shapes_and_get_bboxes(shapes, img_width, img_height):
     normalized_bboxes = []
+    print("labeled shapes :", shapes)
 
     for shape in shapes:
         # Extract x and y coordinates from the shape
@@ -69,6 +134,13 @@ def run_countgd_widget(
     # Will hold a list of normalized exemplar boxes (or remain None)
     exemplar_points = None
 
+    detected_cells = []
+
+    #viewer.scale_bar.visible = True
+    zoom_level = viewer.camera.zoom
+    print(f"Current zoom level: {zoom_level}")
+
+
     # Ensure an image layer is selected.
     if not viewer.layers.selection:
         return "No image layer selected in Napari."
@@ -79,53 +151,156 @@ def run_countgd_widget(
 
     try:
         visible_image = image_layer_select.data
+        print(f"Original image shape: {visible_image.shape}")
+        transform_shape = image_layer_select.extent.world[1]
+        print(f"Dispalyed Image size in World corrdinates:: {transform_shape}")
+        contrast_limits = image_layer_select.contrast_limits
+        print(f"Contrast Limits: {contrast_limits}")
+
+        cursor_position = viewer.cursor.position 
+        intnesity_value = image_layer_select.get_value(cursor_position)
+        print(f"Intensity Value at Cursor Position: {intnesity_value}")
+        print(f"Cursor Position: {cursor_position}")
 
         # Access the shapes layer by name
         shapes_layer = viewer.layers['Shapes']
         exemplar_points = normalize_shapes_and_get_bboxes(
             shapes_layer.data, visible_image.shape[1], visible_image.shape[0])
+        cropped_examplar_imgs = crop_shapes_from_image(visible_image,shapes_layer.data)
+        
+        if  all(img_dim > large_dim for img_dim, large_dim in zip(visible_image.shape,large_image_size)):
+            z_slices, height, width = visible_image.shape
+            # Get the currently visible world coordinates (viewing window)
+            camera_center = viewer.camera.center  # Center of the view in world coordinates
+            print(f"center of the camera: {camera_center}")
 
-        # --- Call the Counting Function ---
-        labels, label_type_returned = generate_countgd_labels(
-            visible_image,
-            label_type=current_label_type,
-            text_prompt=text_prompt,
-            exemplar_image=None,  # Pass PIL Image
-            # May be None if no boxes are drawn.
-            exemplar_points=exemplar_points
-        )
-        # --- Display the Generated Labels ---
-        if label_type_returned == 'points':
+            tile_size = (1024,1024) # Define the tile size (height,width)
+            overlap = (16,16) # Overlap size (height, width)
+            #Compute stride (how much we move per tile)
+            stride = (tile_size[0] - overlap[0], tile_size[1] - overlap[1])
+            for z in range(z_slices):
+                slice_data = visible_image[z]
+                print(slice_data.shape, "Current slice size number:", z)
+                #Iterate over each tile in each dimension
+                for y in range(0, height,stride[0]):
+                    for x in range(0, width,stride[1]):
+                        y_end = min(y + tile_size[0],height)
+                        x_end = min(x + tile_size[1], width)
+                        tile = slice_data[y:y_end,x:x_end]
+                        processed_tile = tile.clip(0,8000)
+                        #if processed_tile.max() > 0:
+                        processed_tile = processed_tile / processed_tile.max()
+                        processed_tile = processed_tile * 255
+
+                        # --- Overlay multiple exemplar images onto the processed tile ---
+                        # We'll overlay them in a grid (row-by-row) starting at the top–left.
+                        exemplar_points = []  # List to record overlay boxes for this tile.
+                        current_x = 0  # current column offset in the tile
+                        current_y = 0  # current row offset in the tile
+                        row_max_height = 0  # maximum height of images in the current row
+                        tile_h, tile_w = tile_size  # dimensions of the tile (assumed square here)
+
+                        for cei in cropped_examplar_imgs:
+                            # Convert the cropped exemplar image to a numpy array if needed.
+                            if not isinstance(cei, np.ndarray):
+                                cei = np.array(cei)
+                            overlay_h, overlay_w = cei.shape[:2]
+
+                            # If the exemplar does not fit in the current row, move to the next row.
+                            if current_x + overlay_w > tile_w:
+                                current_x = 0
+                                current_y += row_max_height
+                                row_max_height = 0
+
+                            # If there is no vertical space left, break out of the loop.
+                            if current_y + overlay_h > tile_h:
+                                break
+
+                            # Overlay the exemplar image onto the processed tile.
+                            processed_tile[current_y:current_y+overlay_h, current_x:current_x+overlay_w] = cei
+
+                            # Compute the overlay box (x1,y1,x2,y2) in tile coordinates.
+                            # Here we normalize by the tile width (assumed equal to tile height).
+                            overlay_box = np.array(
+                                [current_x, current_y, current_x + overlay_w, current_y + overlay_h],
+                                dtype=float
+                            ) / tile_w
+                            exemplar_points.append(overlay_box.tolist())
+                            # Update current_x and row_max_height.
+                            current_x += overlay_w
+                            row_max_height = max(row_max_height, overlay_h)
+                        print(exemplar_points)
+                        exemplar_image = None if len(cropped_examplar_imgs) < 1 else  cropped_examplar_imgs[0]
+                        # --- Call the Counting Function ---
+                        labels, label_type_returned = generate_countgd_labels(
+                            processed_tile,
+                            label_type=current_label_type,
+                            text_prompt=text_prompt,
+                            exemplar_image=exemplar_image,  # Pass PIL Image
+                            # May be None if no boxes are drawn.
+                            exemplar_points=exemplar_points,
+                            offset_x=x,
+                            offset_y=y,
+                            z_slice=z
+                        )
+                        for cell in labels:
+                            print("detected cell: ", cell)
+                            detected_cells.append(cell)
+            # --- Display the Generated Labels ---
             # For a 2D image, offset returned points by the visible region's top-left.
-            points = labels[:, :2]
-            if label_layer is not None and isinstance(label_layer, Points):
-                viewer.layers.remove(label_layer)
-            label_layer = viewer.add_points(
-                data=points,
-                name='CountGD Points',
-                size=5,
-                face_color='red',
-                edge_color='black'
-            )
-        elif label_type_returned == 'bboxes':
-            if label_layer is not None and isinstance(label_layer, Shapes):
-                viewer.layers.remove(label_layer)
-            bbox_shapes_data = []
-            for bbox in labels:
-                min_b, max_b = bbox
-                bbox_shapes_data.append([[min_b[0], max_b[0]], [min_b[1], max_b[0]], [
-                                        min_b[1], max_b[1]], [min_b[0], max_b[1]]])
-            label_layer = viewer.add_shapes(
-                bbox_shapes_data,
-                shape_type='rectangle',
-                name='CountGD BBoxes',
-                edge_color='cyan',
-                face_color='transparent',
-            )
-        else:
-            raise ValueError("Invalid label type returned from CountGD.")
+            if len(detected_cells)> 0:
+                points = np.array(detected_cells)
+                print("Total number of cells detected: ", len(detected_cells))
+                label_layer = viewer.add_points(
+                    data=points,
+                    name='CountGD Points',
+                    size=10,
+                    face_color='red',
+                    edge_color='black'
+                )
 
-        return f"CountGD labels generated ({label_type_returned})."
+        else:
+            # --- Call the Counting Function ---
+            labels, label_type_returned = generate_countgd_labels(
+                visible_image,
+                label_type=current_label_type,
+                text_prompt=text_prompt,
+                exemplar_image=None,  # Pass PIL Image
+                # May be None if no boxes are drawn.
+                exemplar_points=exemplar_points
+            )
+            # --- Display the Generated Labels ---
+            if label_type_returned == 'points':
+                # For a 2D image, offset returned points by the visible region's top-left.
+                points = labels[:, :2]
+                if label_layer is not None and isinstance(label_layer, Points):
+                    viewer.layers.remove(label_layer)
+                label_layer = viewer.add_points(
+                    data=points,
+                    name='CountGD Points',
+                    size=5,
+                    face_color='red',
+                    edge_color='black'
+                )
+            elif label_type_returned == 'bboxes':
+                if label_layer is not None and isinstance(label_layer, Shapes):
+                    viewer.layers.remove(label_layer)
+                bbox_shapes_data = []
+                for bbox in labels:
+                    min_b, max_b = bbox
+                    bbox_shapes_data.append([[min_b[0], max_b[0]], [min_b[1], max_b[0]], [
+                                            min_b[1], max_b[1]], [min_b[0], max_b[1]]])
+                label_layer = viewer.add_shapes(
+                    bbox_shapes_data,
+                    shape_type='rectangle',
+                    name='CountGD BBoxes',
+                    edge_color='cyan',
+                    face_color='transparent',
+                )
+            else:
+                raise ValueError("Invalid label type returned from CountGD.")
+
+            return f"CountGD labels generated ({label_type_returned})."
 
     except Exception as e:
         print(f"CountGD Error: {e}")
