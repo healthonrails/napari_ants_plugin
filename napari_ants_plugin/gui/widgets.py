@@ -7,6 +7,7 @@ from skimage.io import imread, imsave
 import os
 import numpy as np
 import json
+from datetime import datetime
 
 # Make sure these are correctly implemented and accessible
 from ..core.align import align_images  # noqa: F401 (if used elsewhere)
@@ -112,13 +113,15 @@ def normalize_shapes_and_get_bboxes(shapes, img_width, img_height):
     call_button="Run CountGD",
     label_type={"choices": ['points', 'bboxes'], "label": "Label Type"},
     text_prompt={"label": "Object Caption", "value": "cell"},
-    confidence_threshold={"label":"Confidence Threshold", "value": 0.01}
+    confidence_threshold={"label":"Confidence Threshold", "value": 0.01},
+    current_z_slice_only={"widget_type": "CheckBox", "label": "Current Z Slice Only", "value": False},
 )
 def run_countgd_widget(
     viewer: Viewer,
     label_type: str,
     text_prompt: str,
     confidence_threshold: float = 0.01,
+    current_z_slice_only: bool = False,
 ):
     """
     Plugin to run CountGD on the visible portion of the active image.
@@ -155,6 +158,9 @@ def run_countgd_widget(
         print(f"Contrast Limits: {contrast_limits}")
         min_clip_value,max_clip_value = contrast_limits
 
+        # For 3D images, determine the current z slice index from viewer dims.
+        current_z = int(viewer.dims.current_step[0]) if visible_image.ndim == 3 else None
+
         cursor_position = viewer.cursor.position 
         intensity_value = image_layer_select.get_value(cursor_position)
         print(f"Intensity Value at Cursor Position: {intensity_value}")
@@ -182,6 +188,9 @@ def run_countgd_widget(
             stride = (tile_size[0] - overlap[0], tile_size[1] - overlap[1])
             
             for z in range(z_slices):
+                # When current slice only mode is enabled, only process the current z slice.
+                if current_z_slice_only and z != current_z:
+                    continue
                 slice_data = visible_image[z]
                 print(slice_data.shape, "Current slice number:", z)
                 # Loop over tiles
@@ -257,8 +266,10 @@ def run_countgd_widget(
                                 detected_cells.append(cell)
             
             if len(detected_cells) > 0:
-                detected_cells = list(set(detected_cells))
+                
+                detected_cells = list(set([tuple(cell) for cell in detected_cells]))
                 points = np.array(detected_cells)
+                points = np.unique(points, axis=0)
                 print("Total number of cells detected:", len(detected_cells))
                 # if label_layer is not None and isinstance(label_layer, Points):
                 #     viewer.layers.remove(label_layer)
@@ -330,7 +341,8 @@ def run_countgd_widget(
                 columns = [f"dim_{i}" for i in range(num_dims)]
             import pandas as pd
             df = pd.DataFrame(unique_points, columns=columns)
-            csv_filename = "detected_cells.csv"
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            csv_filename = f"detected_cells_{timestamp}.csv"
             df.to_csv(csv_filename, index=False)
             print(f"Unique detected cells saved to {csv_filename}")
         
