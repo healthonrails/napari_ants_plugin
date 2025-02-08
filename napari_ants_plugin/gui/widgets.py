@@ -14,7 +14,7 @@ from ..core.align import align_images  # noqa: F401 (if used elsewhere)
 from ..core.transform import transform_image  # noqa: F401 (if used elsewhere)
 from ..core.utils import log_score  # noqa: F401 (if used elsewhere)
 from ..core.labeling import generate_countgd_labels  # noqa: F401 (if used - important for CountGD)
-
+from ..core.cells import remove_duplicate_cells
 # Globals
 label_layer = None
 current_label_type = None
@@ -266,8 +266,8 @@ def run_countgd_widget(
                                 detected_cells.append(cell)
             
             if len(detected_cells) > 0:
-                
                 detected_cells = list(set([tuple(cell) for cell in detected_cells]))
+                detected_cells = remove_duplicate_cells(detected_cells,cell_size_radius=5)
                 points = np.array(detected_cells)
                 points = np.unique(points, axis=0)
                 print("Total number of cells detected:", len(detected_cells))
