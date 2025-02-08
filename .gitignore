@@ -39,3 +39,5 @@ napari-plugin.json
 *.swo
 *.bak
 *.tmp
+
+*.safetensors
