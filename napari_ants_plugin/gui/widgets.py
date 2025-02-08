@@ -255,9 +255,9 @@ def run_countgd_widget(
                                     inside_box = True
                             if not inside_box:
                                 detected_cells.append(cell)
-                break
             
             if len(detected_cells) > 0:
+                detected_cells = list(set(detected_cells))
                 points = np.array(detected_cells)
                 print("Total number of cells detected:", len(detected_cells))
                 # if label_layer is not None and isinstance(label_layer, Points):
