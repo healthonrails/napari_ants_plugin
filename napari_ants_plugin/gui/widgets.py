@@ -19,11 +19,10 @@ from ..core.cells import remove_duplicate_cells
 label_layer = None
 current_label_type = None
 exemplar_shapes_layer = None  # Stores the shapes layer for exemplar bbox drawing
-large_image_size  = (100,100,100)
+large_image_size = (100, 100, 100)
 
 
-
-def crop_shapes_from_image(image, labeled_shapes,min_clip_value=0,max_clip_value=8000):
+def crop_shapes_from_image(image, labeled_shapes, min_clip_value=0, max_clip_value=8000):
     """
     Crops regions from an image based on labeled shapes.
     Coordinates in labeled_shapes are assumed to be in Z, Y, X format.
@@ -64,16 +63,19 @@ def crop_shapes_from_image(image, labeled_shapes,min_clip_value=0,max_clip_value
                 cropped_image = image[ymin:ymax, xmin:xmax]
             elif image.ndim == 3:
                 # Assuming the image is (Z, Y, X) or similar - adjust if your image dimension order is different
-                if z_slice < image.shape[0]: # Check if z_slice is within image bounds
+                # Check if z_slice is within image bounds
+                if z_slice < image.shape[0]:
                     cropped_image = image[z_slice, ymin:ymax, xmin:xmax]
                 else:
-                    print(f"Warning: z_slice {z_slice} is out of bounds for image with shape {image.shape}. Skipping crop for this shape.")
-                    continue # Skip to the next shape if z_slice is invalid
+                    print(
+                        f"Warning: z_slice {z_slice} is out of bounds for image with shape {image.shape}. Skipping crop for this shape.")
+                    continue  # Skip to the next shape if z_slice is invalid
             else:
-                print(f"Error: Image has unsupported dimensions ({image.ndim}). Expecting 2D or 3D.")
-                return [] # Return empty list if image dimensions are wrong
+                print(
+                    f"Error: Image has unsupported dimensions ({image.ndim}). Expecting 2D or 3D.")
+                return []  # Return empty list if image dimensions are wrong
 
-            cropped_image.clip(min_clip_value,max_clip_value)
+            cropped_image.clip(min_clip_value, max_clip_value)
             if cropped_image.max() > 0:
                 cropped_image = cropped_image / cropped_image.max()
                 cropped_image = cropped_image * 255
@@ -81,7 +83,7 @@ def crop_shapes_from_image(image, labeled_shapes,min_clip_value=0,max_clip_value
 
     except Exception as e:
         print(f"Error during cropping: {e}")
-        return [] # Return empty list if any error occurs during processing
+        return []  # Return empty list if any error occurs during processing
 
     return cropped_images
 
@@ -113,8 +115,10 @@ def normalize_shapes_and_get_bboxes(shapes, img_width, img_height):
     call_button="Run CountGD",
     label_type={"choices": ['points', 'bboxes'], "label": "Label Type"},
     text_prompt={"label": "Object Caption", "value": "cell"},
-    confidence_threshold={"label":"Confidence Threshold", "value": 0.01},
-    current_z_slice_only={"widget_type": "CheckBox", "label": "Current Z Slice Only", "value": False},
+    confidence_threshold={"label": "Confidence Threshold", "value": 0.01},
+    current_z_slice_only={"widget_type": "CheckBox",
+                          "label": "Current Z Slice Only", "value": False},
+    cell_size_radius={"label":"Cell size radius","value":3.0},
 )
 def run_countgd_widget(
     viewer: Viewer,
@@ -122,6 +126,7 @@ def run_countgd_widget(
     text_prompt: str,
     confidence_threshold: float = 0.01,
     current_z_slice_only: bool = False,
+    cell_size_radius: float = 3.0,
 ):
     """
     Plugin to run CountGD on the visible portion of the active image.
@@ -156,12 +161,13 @@ def run_countgd_widget(
         print(f"Displayed Image size in World coordinates: {transform_shape}")
         contrast_limits = image_layer_select.contrast_limits
         print(f"Contrast Limits: {contrast_limits}")
-        min_clip_value,max_clip_value = contrast_limits
+        min_clip_value, max_clip_value = contrast_limits
 
         # For 3D images, determine the current z slice index from viewer dims.
-        current_z = int(viewer.dims.current_step[0]) if visible_image.ndim == 3 else None
+        current_z = int(
+            viewer.dims.current_step[0]) if visible_image.ndim == 3 else None
 
-        cursor_position = viewer.cursor.position 
+        cursor_position = viewer.cursor.position
         intensity_value = image_layer_select.get_value(cursor_position)
         print(f"Intensity Value at Cursor Position: {intensity_value}")
         print(f"Cursor Position: {cursor_position}")
@@ -170,12 +176,12 @@ def run_countgd_widget(
         shapes_layer = viewer.layers['Shapes']
         exemplar_points_from_shapes = normalize_shapes_and_get_bboxes(
             shapes_layer.data, visible_image.shape[1], visible_image.shape[0])
-        cropped_examplar_imgs = crop_shapes_from_image(visible_image, 
+        cropped_examplar_imgs = crop_shapes_from_image(visible_image,
                                                        shapes_layer.data,
                                                        min_clip_value=min_clip_value,
                                                        max_clip_value=max_clip_value
                                                        )
-        
+
         # Decide whether to process the image by tiling or as a whole.
         if all(img_dim > large_dim for img_dim, large_dim in zip(visible_image.shape, large_image_size)):
             # --- Tiling branch ---
@@ -186,7 +192,7 @@ def run_countgd_widget(
             tile_size = (1024, 1024)  # (height, width)
             overlap = (16, 16)        # (height, width)
             stride = (tile_size[0] - overlap[0], tile_size[1] - overlap[1])
-            
+
             for z in range(z_slices):
                 # When current slice only mode is enabled, only process the current z slice.
                 if current_z_slice_only and z != current_z:
@@ -199,7 +205,8 @@ def run_countgd_widget(
                         y_end = min(y + tile_size[0], height)
                         x_end = min(x + tile_size[1], width)
                         tile = slice_data[y:y_end, x:x_end]
-                        processed_tile = tile.clip(min_clip_value, max_clip_value)
+                        processed_tile = tile.clip(
+                            min_clip_value, max_clip_value)
                         if processed_tile.max() > 0:
                             processed_tile = processed_tile / processed_tile.max()
                         processed_tile = processed_tile * 255
@@ -228,16 +235,21 @@ def run_countgd_widget(
                                 break
 
                             # Overlay the exemplar image onto the processed tile.
-                            processed_tile[current_y:current_y+overlay_h, current_x:current_x+overlay_w] = cei
+                            processed_tile[current_y:current_y+overlay_h,
+                                           current_x:current_x+overlay_w] = cei
 
                             # Compute normalized overlay box coordinates (x1,y1,x2,y2).
-                            overlay_box = [current_x, current_y, current_x + overlay_w, current_y + overlay_h]
-                            tile_exemplar_boxes.append(overlay_box)
+                            overlay_box = [
+                                current_x, current_y, current_x + overlay_w, current_y + overlay_h]
+                            overlay_box_global = [
+                                x+current_x, y+current_y, x+current_x+overlay_w, y+current_y+overlay_h]
+                            tile_exemplar_boxes.append(overlay_box_global)
                             overlay_box_norm = np.array(
                                 overlay_box,
                                 dtype=float
                             ) / tile_w
-                            tile_exemplar_points.append(overlay_box_norm.tolist())
+                            tile_exemplar_points.append(
+                                overlay_box_norm.tolist())
                             current_x += overlay_w
                             row_max_height = max(row_max_height, overlay_h)
 
@@ -246,28 +258,31 @@ def run_countgd_widget(
                             processed_tile,
                             label_type=current_label_type,
                             text_prompt=text_prompt,
-                            exemplar_image=None,# if len(cropped_examplar_imgs) < 1 else cropped_examplar_imgs[0],
+                            # if len(cropped_examplar_imgs) < 1 else cropped_examplar_imgs[0],
+                            exemplar_image=None,
                             exemplar_points=tile_exemplar_points,
                             offset_x=x,
                             offset_y=y,
                             z_slice=z,
                             confidence_threshold=confidence_threshold
                         )
-                        
+
                         # --- Filter out any returned points that match the exemplar overlay points ---
                         for cell in labels:
                             cell_z, cell_y, cell_x = cell
                             inside_box = False
                             for gloabl_box in tile_exemplar_boxes:
-                                if (cell_x >= gloabl_box[0] and cell_x <= gloabl_box[2] and 
-                                    cell_y >= gloabl_box[1] and cell_y <= gloabl_box[3]):
+                                if (cell_x >= gloabl_box[0] and cell_x <= gloabl_box[2] and
+                                        cell_y >= gloabl_box[1] and cell_y <= gloabl_box[3]):
                                     inside_box = True
                             if not inside_box:
                                 detected_cells.append(cell)
-            
+
             if len(detected_cells) > 0:
-                detected_cells = list(set([tuple(cell) for cell in detected_cells]))
-                detected_cells = remove_duplicate_cells(detected_cells,cell_size_radius=5)
+                detected_cells = list(
+                    set([tuple(cell) for cell in detected_cells]))
+                detected_cells = remove_duplicate_cells(
+                    detected_cells, cell_size_radius=cell_size_radius)
                 points = np.array(detected_cells)
                 points = np.unique(points, axis=0)
                 print("Total number of cells detected:", len(detected_cells))
@@ -325,7 +340,7 @@ def run_countgd_widget(
                 # (Optionally, you might extract center points from bboxes if you wish to save them.)
             else:
                 raise ValueError("Invalid label type returned from CountGD.")
-        
+
         # --- Save unique detected cells to a CSV file ---
         if detected_cells:
             detected_array = np.array(detected_cells)
@@ -345,13 +360,12 @@ def run_countgd_widget(
             csv_filename = f"detected_cells_{timestamp}.csv"
             df.to_csv(csv_filename, index=False)
             print(f"Unique detected cells saved to {csv_filename}")
-        
+
         return f"CountGD labels generated ({label_type_returned})."
-    
+
     except Exception as e:
         print(f"CountGD Error: {e}")
         return f"Error running CountGD: {e}"
-
 
 
 @magic_factory(
