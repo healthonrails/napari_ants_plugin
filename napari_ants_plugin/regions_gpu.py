@@ -253,14 +253,7 @@ def create_region_mapping(bg_atlas: BrainGlobeAtlas) -> Dict[int, Tuple[str, str
     return {int(row["id"]): (row["acronym"], row["name"]) for _, row in lookup_df.iterrows()}
 
 
-def add_region_info_to_points(
-    df: pd.DataFrame,
-    annotation: da.Array,
-    bg_atlas: BrainGlobeAtlas
-) -> pd.DataFrame:
-    """
-    Add region acronym and name info to points in the CSV.
-    """
+def add_region_info_to_points(df: pd.DataFrame, annotation: da.Array, bg_atlas: BrainGlobeAtlas) -> pd.DataFrame:
     xyz = df[["z", "y", "x"]].to_numpy(dtype=int)
     shape = annotation.shape
     valid_mask = (
@@ -272,13 +265,10 @@ def add_region_info_to_points(
         logger.info(f"Filtered out {np.sum(~valid_mask)} out-of-bound points.")
         df = df[valid_mask].copy()
         xyz = xyz[valid_mask]
-    dask_xyz = da.from_array(xyz, chunks="auto")
-    region_vals_dask = annotation[
-        dask_xyz[:, 0],
-        dask_xyz[:, 1],
-        dask_xyz[:, 2]
-    ]
-    region_vals = region_vals_dask.compute()
+
+    # Use vindex to directly extract values at the given coordinates.
+    region_vals = annotation.vindex[xyz[:, 0], xyz[:, 1], xyz[:, 2]].compute()
+
     mapping = create_region_mapping(bg_atlas)
     region_info = pd.Series(region_vals).map(mapping)
     df["region_acronym"] = region_info.apply(
