@@ -221,9 +221,9 @@ class AtlasUpsampler:
             f"Created final Zarr dataset at '{self.final_zarr_path}' with chunk shape {chunks}.")
 
         full_target_shape = (
-            int(round(cube_size[0] * new_zoom_factors[0])),
-            int(round(cube_size[1] * new_zoom_factors[1])),
-            int(round(cube_size[2] * new_zoom_factors[2]))
+            int(np.ceil(cube_size[0] * new_zoom_factors[0])),
+            int(np.ceil(cube_size[1] * new_zoom_factors[1])),
+            int(np.ceil(cube_size[2] * new_zoom_factors[2]))
         )
 
         self.write_queue = queue.Queue()
