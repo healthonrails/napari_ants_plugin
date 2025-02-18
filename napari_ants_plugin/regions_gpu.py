@@ -81,6 +81,39 @@ def profile_func(func):
 # ==============================================================================
 
 
+def compute_recursive_counts(region_id: int,
+                             mapping: Dict[int, Tuple[str, str]],
+                             group_counts: Dict[str, int],
+                             tree: Any,
+                             memo: Dict[int, int]) -> int:
+    if region_id in memo:
+        return memo[region_id]
+    # Get the region acronym.
+    acr = mapping.get(region_id, ("", ""))[0]
+    # Start with the direct count for this region.
+    total = group_counts.get(acr, 0)
+    # Recursively add counts from all children.
+    for child in tree.children(region_id):
+        total += compute_recursive_counts(child.identifier,
+                                          mapping, group_counts, tree, memo)
+    memo[region_id] = total
+    return total
+
+
+def precompute_hierarchical_counts_recursive(
+    atlas: BrainGlobeAtlas, group_counts: Dict[str, int]
+) -> Dict[str, int]:
+    mapping = create_region_mapping(atlas)
+    hierarchical_counts: Dict[str, int] = {}
+    tree = atlas.structures.tree
+    memo: Dict[int, int] = {}
+    # For each region in the atlas, compute its full (recursive) count.
+    for region_id, (acr, _) in mapping.items():
+        hierarchical_counts[acr] = compute_recursive_counts(
+            region_id, mapping, group_counts, tree, memo)
+    return hierarchical_counts
+
+
 def get_bounding_box_mask(
     dask_anno_gpu: da.Array, selected_ids: List[int]
 ) -> Tuple[Optional[da.Array], Optional[Tuple[int, int, int, int, int, int]]]:
@@ -254,6 +287,11 @@ def create_region_mapping(bg_atlas: BrainGlobeAtlas) -> Dict[int, Tuple[str, str
 
 
 def add_region_info_to_points(df: pd.DataFrame, annotation: da.Array, bg_atlas: BrainGlobeAtlas) -> pd.DataFrame:
+    """
+    Fast version of add_region_info_to_points that loads the annotation array
+    into memory (if possible) and uses vectorized mapping for region info.
+    """
+    # Convert point coordinates to a NumPy array.
     xyz = df[["z", "y", "x"]].to_numpy(dtype=int)
     shape = annotation.shape
     valid_mask = (
@@ -266,15 +304,22 @@ def add_region_info_to_points(df: pd.DataFrame, annotation: da.Array, bg_atlas: 
         df = df[valid_mask].copy()
         xyz = xyz[valid_mask]
 
-    # Use vindex to directly extract values at the given coordinates.
-    region_vals = annotation.vindex[xyz[:, 0], xyz[:, 1], xyz[:, 2]].compute()
+    # Load the entire annotation array into a NumPy array (if it fits in memory).
+    annotation_np = annotation
+    # Use NumPy indexing to extract the region values for all points.
+    region_vals = annotation_np[xyz[:, 0], xyz[:, 1], xyz[:, 2]]
 
+    # Create the mapping from region ID to (acronym, name).
     mapping = create_region_mapping(bg_atlas)
-    region_info = pd.Series(region_vals).map(mapping)
-    df["region_acronym"] = region_info.apply(
-        lambda x: x[0] if isinstance(x, tuple) else None)
-    df["region_name"] = region_info.apply(
-        lambda x: x[1] if isinstance(x, tuple) else None)
+
+    # Use np.vectorize to apply the mapping in a vectorized manner.
+    # This will return two arrays: one for acronyms and one for names.
+    vectorized_map = np.vectorize(lambda r: mapping.get(r, (None, None)))
+    region_info = vectorized_map(region_vals)
+
+    # region_info is a tuple (acronym_array, name_array).
+    df["region_acronym"] = region_info[0]
+    df["region_name"] = region_info[1]
     return df
 
 
@@ -826,7 +871,7 @@ def main() -> None:
             f"Processed points CSV '{args.points_final_csv}' exists. Loading.")
         df_points = pd.read_csv(args.points_final_csv)
     else:
-        df_points = process_points(args.points_csv, dask_anno_cpu, atlas)
+        df_points = process_points(args.points_csv, annotation_data_cpu, atlas)
         if not df_points.empty:
             df_points.to_csv(args.points_final_csv, index=False)
             logger.info(
@@ -852,7 +897,9 @@ def main() -> None:
         else:
             group_counts = {}
 
-    hierarchical_counts = precompute_hierarchical_counts(atlas, group_counts)
+    # hierarchical_counts = precompute_hierarchical_counts(atlas, group_counts)
+    hierarchical_counts = precompute_hierarchical_counts_recursive(
+        atlas, group_counts)
 
     # Compute region bounding boxes from points to speed up ROI extraction.
     region_bounding_boxes = compute_region_bounding_boxes_by_acronym(
