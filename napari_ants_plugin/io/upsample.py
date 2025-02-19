@@ -170,6 +170,22 @@ class AtlasUpsampler:
         else:
             self.logger.info(
                 "No mapping performed; src_space and dest_space not provided.")
+        in_z, in_y, in_x = atlas_data.shape
+        self.logger.info(
+            f"Atlas annotation shape (Z, Y, X) after processing: ({in_z}, {in_y}, {in_x})")
+        # # Flip the left-right axis.
+        # atlas_data = np.flip(atlas_data, axis=2)
+        # Determine new axis order based on dimension sizes:
+        dims = np.array([in_z, in_y, in_x])
+        sorted_indices = np.argsort(dims)  # smallest to largest
+        # We want:
+        # new z (axis 0) = smallest dimension
+        # new y (axis 1) = largest dimension
+        # new x (axis 2) = intermediate dimension
+        new_order = [sorted_indices[0], sorted_indices[2], sorted_indices[1]]
+
+        self.logger.info(f"Transposing atlas data with order: {new_order}")
+        atlas_data = atlas_data.transpose(new_order)
 
         # Optionally swap the X and Y axes.
         if self.swap_xy:
@@ -178,11 +194,9 @@ class AtlasUpsampler:
         else:
             self.logger.info("Not swapping X and Y axes.")
 
-        # Flip the left-right axis.
-        atlas_data = np.flip(atlas_data, axis=2)
         in_z, in_y, in_x = atlas_data.shape
         self.logger.info(
-            f"Atlas annotation shape (Z, Y, X) after processing: ({in_z}, {in_y}, {in_x})")
+            f"Atlas annotation shape adjusted (z, y, x): ({in_z}, {in_y}, {in_x})")
 
         new_zoom_factors = (
             self.atlas_voxel_size[0] / self.raw_voxel_size[0],  # Z
@@ -345,13 +359,13 @@ def main() -> None:
     parser.add_argument(
         '--src-space',
         type=str,
-        default='asr',
+        default=None,
         help='Optional source space for mapping (e.g., "asr"). If not provided, mapping is skipped.'
     )
     parser.add_argument(
         '--dest-space',
         type=str,
-        default="iar",
+        default=None,
         help='Optional destination space for mapping (e.g., "iar"). If not provided, mapping is skipped.'
     )
     # By default, do not swap the X and Y axes. Use --swap-xy to enable swapping.
