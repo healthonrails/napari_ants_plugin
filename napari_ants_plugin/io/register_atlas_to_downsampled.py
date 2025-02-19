@@ -217,7 +217,7 @@ def parse_arguments() -> argparse.Namespace:
                         help="Path to the fixed image stored as a Zarr store or TIF file.")
     parser.add_argument("--atlas_name", type=str, default="kim_mouse_25um",
                         help="BrainGlobe atlas name (e.g., allen_mouse_25um).")
-    parser.add_argument("--output_annotation", type=str, default='transformed_annotation.nii.gz',
+    parser.add_argument("--output_annotation", type=str, default='transformed_annotation.tif',
                         help="Output file path for the transformed atlas annotation (e.g., .nii.gz or .tif).")
     parser.add_argument("--downsampled_orientation", type=str, default="ial",
                         help="Desired downsampled orientation (default: 'ial').")
