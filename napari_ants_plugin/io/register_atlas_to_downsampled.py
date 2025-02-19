@@ -3,16 +3,18 @@
 register_atlas_to_image.py
 
 This script loads a fixed image (stored as a Zarr store or a TIF file),
-fetches the atlas template and annotation via the BrainGlobe Atlas API using an atlas name (e.g., "allen_mouse_25um"),
-registers the atlas (as the moving image) to the fixed image using ANTsPy with non-linear (SyN) registration,
-applies the computed transform to the atlas annotation using nearest-neighbor interpolation,
-and saves the transformed annotation to the specified output path.
+fetches the atlas template and annotation via the BrainGlobe Atlas API using an atlas name
+(e.g., "allen_mouse_25um"), optionally maps the atlas images to a downsampled orientation,
+registers the atlas (as the moving image) to the fixed image using ANTsPy with non-linear (SyN)
+registration, applies the computed transform to the atlas annotation using nearest-neighbor
+interpolation, and saves the transformed annotation to the specified output path.
 
 Usage:
     python register_atlas_to_image.py \
       --fixed_image path/to/fixed_image.zarr_or_tif \
       --atlas_name allen_mouse_25um \
-      --output_annotation transformed_annotation.nii.gz
+      --output_annotation transformed_annotation.nii.gz \
+      [--downsampled_orientation ial]
 """
 
 import argparse
@@ -25,6 +27,7 @@ import ants
 import zarr
 import tifffile as tiff
 from brainglobe_atlasapi import BrainGlobeAtlas  # BrainGlobe Atlas API
+import brainglobe_space as bgs  # for mapping between orientations
 
 
 def setup_logging() -> None:
@@ -96,12 +99,14 @@ def load_fixed_image(image_path: str) -> ants.ANTsImage:
         )
 
 
-def load_atlas_images(atlas_name: str) -> (ants.ANTsImage, ants.ANTsImage):
+def load_atlas_images(atlas_name: str, target_orientation: str) -> (ants.ANTsImage, ants.ANTsImage):
     """
-    Retrieve the atlas template and annotation using the BrainGlobe Atlas API.
+    Retrieve the atlas template and annotation using the BrainGlobe Atlas API,
+    and if necessary, map the atlas images to the target (downsampled) orientation.
 
     Parameters:
         atlas_name (str): Name of the atlas (e.g., "allen_mouse_25um").
+        target_orientation (str): The desired orientation (e.g., 'ial') for downstream processing.
 
     Returns:
         tuple: (atlas_template, atlas_annotation) as ANTs images.
@@ -115,11 +120,19 @@ def load_atlas_images(atlas_name: str) -> (ants.ANTsImage, ants.ANTsImage):
         f"template shape: {atlas_reference.shape}, "
         f"annotation shape: {atlas_annotation.shape}"
     )
+    if atlas.orientation != target_orientation:
+        logging.info(f"Atlas orientation ({atlas.orientation}) differs from target downsampled orientation "
+                     f"({target_orientation}). Mapping atlas images...")
+        # Map both the atlas template and annotation to the target orientation.
+        atlas_reference = bgs.map_stack_to(
+            atlas.orientation, target_orientation, atlas_reference)
+        atlas_annotation = bgs.map_stack_to(
+            atlas.orientation, target_orientation, atlas_annotation)
     return ants.from_numpy(atlas_reference), ants.from_numpy(atlas_annotation)
 
 
 def register_atlas_to_fixed(fixed_img: ants.ANTsImage,
-                              moving_img: ants.ANTsImage) -> dict:
+                            moving_img: ants.ANTsImage) -> dict:
     """
     Register the atlas template (moving image) to the fixed image using non-linear (SyN) registration.
 
@@ -150,7 +163,8 @@ def apply_transform_to_annotation(fixed_img: ants.ANTsImage,
     Returns:
         ants.ANTsImage: The transformed atlas annotation.
     """
-    logging.info("Applying transforms to atlas annotation (using nearest-neighbor interpolation)...")
+    logging.info(
+        "Applying transforms to atlas annotation (using nearest-neighbor interpolation)...")
     transformed_annotation = ants.apply_transforms(
         fixed=fixed_img,
         moving=atlas_annotation,
@@ -176,14 +190,17 @@ def save_transformed_annotation(annotation: ants.ANTsImage,
 
     if ext in ['.tif', '.tiff']:
         tiff.imwrite(output_path, annotation_array)
-        logging.info(f"Transformed atlas annotation saved as TIF to: {output_path}")
+        logging.info(
+            f"Transformed atlas annotation saved as TIF to: {output_path}")
     elif ext in ['.nii', '.nii.gz']:
         ants.image_write(annotation, output_path)
-        logging.info(f"Transformed atlas annotation saved as NIfTI to: {output_path}")
+        logging.info(
+            f"Transformed atlas annotation saved as NIfTI to: {output_path}")
     else:
         # Default to TIF if extension is unrecognized.
         tiff.imwrite(output_path, annotation_array)
-        logging.info(f"Unrecognized extension; saved annotation as TIF to: {output_path}")
+        logging.info(
+            f"Unrecognized extension; saved annotation as TIF to: {output_path}")
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -198,10 +215,12 @@ def parse_arguments() -> argparse.Namespace:
     )
     parser.add_argument("--fixed_image", type=str, required=True,
                         help="Path to the fixed image stored as a Zarr store or TIF file.")
-    parser.add_argument("--atlas_name", type=str, required=True,
+    parser.add_argument("--atlas_name", type=str, default="kim_mouse_25um",
                         help="BrainGlobe atlas name (e.g., allen_mouse_25um).")
-    parser.add_argument("--output_annotation", type=str, required=True,
+    parser.add_argument("--output_annotation", type=str, default='transformed_annotation.nii.gz',
                         help="Output file path for the transformed atlas annotation (e.g., .nii.gz or .tif).")
+    parser.add_argument("--downsampled_orientation", type=str, default="ial",
+                        help="Desired downsampled orientation (default: 'ial').")
     return parser.parse_args()
 
 
@@ -217,7 +236,8 @@ def main() -> None:
         return
 
     try:
-        atlas_template, atlas_annotation = load_atlas_images(args.atlas_name)
+        atlas_template, atlas_annotation = load_atlas_images(
+            args.atlas_name, args.downsampled_orientation)
     except Exception as e:
         logging.error(f"Failed to load atlas images: {e}")
         return
@@ -229,14 +249,14 @@ def main() -> None:
         reg_result.get('fwdtransforms', [])
     )
 
+    save_transformed_annotation(transformed_annotation, args.output_annotation)
+    logging.info("Processing completed successfully.")
+
     # Optionally, display the registration result.
     try:
         ants.plot(fixed_img, transformed_annotation)
     except Exception as e:
         logging.warning(f"Could not display plot: {e}")
-
-    save_transformed_annotation(transformed_annotation, args.output_annotation)
-    logging.info("Processing completed successfully.")
 
 
 if __name__ == '__main__':
