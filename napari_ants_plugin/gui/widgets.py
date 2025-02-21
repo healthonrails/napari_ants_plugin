@@ -22,73 +22,106 @@ exemplar_shapes_layer = None  # Stores the shapes layer for exemplar bbox drawin
 large_image_size = (100, 100, 100)
 
 
-def crop_shapes_from_image(image, labeled_shapes, min_clip_value=0, max_clip_value=8000):
+def crop_shapes_from_image(image, labeled_shapes=None, min_clip_value=0, max_clip_value=8000):
     """
-    Crops regions from an image based on labeled shapes.
-    Coordinates in labeled_shapes are assumed to be in Z, Y, X format.
+    Crops regions from an image based on labeled shapes and saves them to an exemplars folder
+    located in the parent directory of the current file. If the exemplars already exist and
+    match the number of shapes, they are loaded and returned.
+
+    If labeled_shapes is None or an error occurs while processing a shape, the function logs
+    the issue and continues, always returning the cropped_images list (which may be empty).
 
     Args:
-        image (np.ndarray): The large image to crop from (assuming it's a NumPy array, could be 2D or 3D).
-        labeled_shapes (list of np.ndarray): A list where each np.ndarray represents a shape.
-                                             Each shape array is expected to be in the format:
-                                             [[z1, y1, x1], [z2, y2, x2], ..., [zn, yn, xn]].
+        image (np.ndarray): The input image (2D or 3D).
+        labeled_shapes (list of np.ndarray or None): List of shapes with coordinates in [z, y, x] format.
+        min_clip_value (int): Minimum intensity value for clipping.
+        max_clip_value (int): Maximum intensity value for clipping.
 
     Returns:
-        list of np.ndarray: A list of cropped image regions, one for each shape.
-                            Returns an empty list if there are no shapes or an error occurs.
+        list of np.ndarray: List of cropped (or loaded) image regions.
     """
     cropped_images = []
-    if not labeled_shapes:
-        print("No shapes provided to crop.")
-        return cropped_images
 
-    try:
-        for shape in labeled_shapes:
-            # Extract z, y, and x coordinates from the shape (Z, Y, X format)
+    if labeled_shapes is None:
+        print("No labeled shapes provided. Nothing to crop.")
+        labeled_shapes = []
+
+    # Determine the exemplars folder location:
+    current_file_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.dirname(current_file_dir)
+    exemplars_folder = os.path.join(parent_dir, "exemplars")
+
+    # Ensure the exemplars folder exists
+    if not os.path.exists(exemplars_folder):
+        os.makedirs(exemplars_folder)
+
+    # Look for saved exemplar images (assumed to be .tif files)
+    exemplar_files = sorted([f for f in os.listdir(
+        exemplars_folder) if f.endswith('.tif')])
+    if exemplar_files and len(exemplar_files) > 0:
+        for file in exemplar_files:
+            file_path = os.path.join(exemplars_folder, file)
+            try:
+                cropped_images.append(imread(file_path))
+            except Exception as e:
+                print(f"Error loading image {file_path}: {e}")
+        print(
+            f"Loaded {len(cropped_images)} exemplar images from '{exemplars_folder}'.")
+
+    # Process each shape individually, catching errors per shape so we always return cropped_images
+    for idx, shape in enumerate(labeled_shapes):
+        try:
+            # Extract z, y, x coordinates (assumes shape is in Z, Y, X format)
             z_coords = shape[:, 0]
             y_coords = shape[:, 1]
             x_coords = shape[:, 2]
 
-            # Get bounding box coordinates (min and max) for x and y
+            # Determine bounding box coordinates
             xmin = int(np.min(x_coords))
             ymin = int(np.min(y_coords))
             xmax = int(np.max(x_coords))
             ymax = int(np.max(y_coords))
+            z_slice = int(np.min(z_coords))  # Use min z for simplicity
 
-            # Determine z-slice to use (using min z for simplicity)
-            z_slice = int(np.min(z_coords))
-
-            # Handle potential 2D or 3D image input
+            # Crop image based on dimensions
             if image.ndim == 2:
                 cropped_image = image[ymin:ymax, xmin:xmax]
             elif image.ndim == 3:
-                # Assuming the image is (Z, Y, X) or similar - adjust if your image dimension order is different
-                # Check if z_slice is within image bounds
                 if z_slice < image.shape[0]:
                     cropped_image = image[z_slice, ymin:ymax, xmin:xmax]
                 else:
                     print(
-                        f"Warning: z_slice {z_slice} is out of bounds for image with shape {image.shape}. Skipping crop for this shape.")
-                    continue  # Skip to the next shape if z_slice is invalid
+                        f"Warning: z_slice {z_slice} is out of bounds for image with shape {image.shape}. Skipping shape index {idx}.")
+                    continue
             else:
                 print(
-                    f"Error: Image has unsupported dimensions ({image.ndim}). Expecting 2D or 3D.")
-                return []  # Return empty list if image dimensions are wrong
+                    f"Error: Unsupported image dimensions ({image.ndim}). Skipping shape index {idx}.")
+                continue
 
-            cropped_image.clip(min_clip_value, max_clip_value)
+            # Clip and normalize the cropped image
+            cropped_image = np.clip(
+                cropped_image, min_clip_value, max_clip_value)
             if cropped_image.max() > 0:
-                cropped_image = cropped_image / cropped_image.max()
-                cropped_image = cropped_image * 255
+                cropped_image = cropped_image / cropped_image.max() * 255
+
+            # Generate a timestamp for the filename
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            # Save the cropped image to the exemplars folder with a timestamp in the filename
+            exemplar_filename = os.path.join(
+                exemplars_folder, f"exemplar_{idx}_{timestamp}.tif")
+            imsave(exemplar_filename, cropped_image)
             cropped_images.append(cropped_image)
+        except Exception as e:
+            print(f"Error cropping shape at index {idx}: {e}")
+            continue
 
-    except Exception as e:
-        print(f"Error during cropping: {e}")
-        return []  # Return empty list if any error occurs during processing
-
+    print(
+        f"Cropped and saved {len(cropped_images)} exemplar images to '{exemplars_folder}'.")
     return cropped_images
 
-
 # Function to normalize shapes and convert to bbox
+
+
 def normalize_shapes_and_get_bboxes(shapes, img_width, img_height):
     normalized_bboxes = []
     print("labeled shapes :", shapes)
@@ -118,7 +151,7 @@ def normalize_shapes_and_get_bboxes(shapes, img_width, img_height):
     confidence_threshold={"label": "Confidence Threshold", "value": 0.01},
     current_z_slice_only={"widget_type": "CheckBox",
                           "label": "Current Z Slice Only", "value": False},
-    cell_size_radius={"label":"Cell size radius","value":3.0},
+    cell_size_radius={"label": "Cell size radius", "value": 3.0},
 )
 def run_countgd_widget(
     viewer: Viewer,
