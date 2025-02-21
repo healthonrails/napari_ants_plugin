@@ -128,8 +128,15 @@ def downsample_z(xy_image, target_d, interpolation_order, logger):
     return downsampled
 
 
-def downsample_zarr(input_zarr_path, output_tiff_path, input_voxel_size, bg_atlas, logger,
-                    zarr_origin='ial', interpolation_order=1):
+def downsample_zarr(input_zarr_path,
+                    output_tiff_path,
+                    input_voxel_size,
+                    bg_atlas,
+                    logger,
+                    zarr_origin='ial',
+                    interpolation_order=1,
+                    is_mapping_downsampled_to_atlas=False,
+                    ):
     """
     Downsample a Zarr array to a target shape computed from physical extents and a desired atlas resolution.
     """
@@ -184,7 +191,7 @@ def downsample_zarr(input_zarr_path, output_tiff_path, input_voxel_size, bg_atla
         f"Zoom factors: Depth: {scale_d:.4f}, Height: {scale_h:.4f}, Width: {scale_w:.4f}")
 
     # Convert to a Dask array.
-    dask_image = da.from_zarr(zarr_array,chunks=(64,1024,1024))
+    dask_image = da.from_zarr(zarr_array, chunks=(64, 1024, 1024))
     logger.info(f"Input image shape (Dask array): {dask_image.shape}")
 
     # --- XY Downsampling ---
@@ -195,9 +202,10 @@ def downsample_zarr(input_zarr_path, output_tiff_path, input_voxel_size, bg_atla
     downsampled_image = downsample_z(
         xy_downsampled, target_d, interpolation_order, logger)
 
-    # Reorient the image from the Zarr origin to the atlas orientation.
-    downsampled_image = bg.map_stack_to(
-        zarr_origin, atlas_origin, downsampled_image)
+    if is_mapping_downsampled_to_atlas:
+        # Reorient the image from the Zarr origin to the atlas orientation.
+        downsampled_image = bg.map_stack_to(
+            zarr_origin, atlas_origin, downsampled_image)
     logger.info(f"Final downsampled image shape: {downsampled_image.shape}")
 
     # Save the output TIFF.
