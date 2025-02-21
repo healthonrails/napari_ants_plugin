@@ -1,7 +1,7 @@
 import numpy as np
 from PIL import Image
 # Assuming predict.py is in the same directory
-from .countgd.predict import ObjectCounter
+from napari_ants_plugin.core.countgd.predict import ObjectCounter
 from napari.layers import Image as NapariImage  # To avoid naming conflict
 
 # Initialize ObjectCounter (load model once for efficiency)
@@ -9,13 +9,13 @@ object_counter = ObjectCounter()
 DEFAULT_TEXT_PROMPT = "cell"  # Or any default prompt you prefer
 
 
-def generate_countgd_labels(image_roi, label_type='points', 
-                            text_prompt=DEFAULT_TEXT_PROMPT, 
-                            exemplar_image=None, 
+def generate_countgd_labels(image_roi, label_type='points',
+                            text_prompt=DEFAULT_TEXT_PROMPT,
+                            exemplar_image=None,
                             exemplar_points=None,
                             offset_x=0,
                             offset_y=0,
-                            z_slice = None,
+                            z_slice=None,
                             confidence_threshold=0.23,
                             ):
     """
@@ -76,10 +76,12 @@ def generate_countgd_labels(image_roi, label_type='points',
     if exemplar_image is not None:
         if isinstance(exemplar_image, np.ndarray):
             exemplar_image_np = exemplar_image
-            exemplar_image_pil = Image.fromarray(exemplar_image_np).convert('RGB') # Convert numpy exemplar to PIL
+            exemplar_image_pil = Image.fromarray(exemplar_image_np).convert(
+                'RGB')  # Convert numpy exemplar to PIL
         elif isinstance(exemplar_image, NapariImage):
             exemplar_image_np = exemplar_image.data
-            exemplar_image_pil = Image.fromarray(exemplar_image_np, 'RGB')  # Convert numpy exemplar to PIL
+            exemplar_image_pil = Image.fromarray(
+                exemplar_image_np, 'RGB')  # Convert numpy exemplar to PIL
         elif isinstance(exemplar_image, Image.Image):
             exemplar_image_pil = exemplar_image  # Already a PIL image.
         else:
@@ -97,7 +99,8 @@ def generate_countgd_labels(image_roi, label_type='points',
             text_prompt=text_prompt,
             exemplar_image=exemplar_image_pil,
             exemplar_boxes=exemplar_boxes_normalized,
-            confidence_threshold=confidence_threshold,  # Adjust threshold as needed.
+            # Adjust threshold as needed.
+            confidence_threshold=confidence_threshold,
             # Using text_prompt as keywords for filtering.
             keywords=text_prompt
         )
@@ -117,7 +120,8 @@ def generate_countgd_labels(image_roi, label_type='points',
             if (not is_color_2d) and (image_roi_np.ndim == 3) and z_slice is None:
                 points.append([center_y, center_x, 0])
             elif z_slice is not None:
-                points.append([z_slice, center_y + offset_y, center_x + offset_x])
+                points.append(
+                    [z_slice, center_y + offset_y, center_x + offset_x])
             else:
                 points.append([center_y, center_x])
         print(f"Detected {len(points)} for prompt: '{text_prompt}'")
