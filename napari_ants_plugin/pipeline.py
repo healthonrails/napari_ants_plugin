@@ -18,6 +18,7 @@ import logging
 import os
 import sys
 from typing import Any
+import pandas as pd
 
 from napari_ants_plugin.io.tiff2zarr import convert_tiff_to_zarr
 from napari_ants_plugin.io.downsample_gpu import downsample_zarr
@@ -288,12 +289,21 @@ class ImageProcessingPipeline:
         if not check_file_exists(self.unique_cells_csv):
             try:
                 self.logger.info("Step 7: Removing duplicate cell detections")
-                remove_duplicate_cells(
-                    detected_cells_csv=self.detected_cells_csv,
-                    deduplication_radius=self.config.deduplication_radius,
-                    unique_cells_csv=self.unique_cells_csv,
-                    logger=self.logger
+                df_detected = pd.read_csv(self.detected_cells_csv)
+                unique_locations = remove_duplicate_cells(
+                    cell_locations=df_detected[['z', 'y', 'x']].values,
+                    cell_size_radius=self.config.deduplication_radius,
                 )
+                try:
+                    # Create a DataFrame with the proper header and save to CSV
+                    df_out = pd.DataFrame(
+                        unique_locations, columns=['z', 'y', 'x'])
+                    df_out.to_csv(self.unique_cells_csv, index=False)
+                    print(
+                        f"Unique cell locations saved to: {self.unique_cells_csv}")
+                except Exception as e:
+                    print(f"Error writing to output CSV file: {e}")
+
             except Exception as e:
                 self.logger.error(f"Cell deduplication failed: {e}")
                 sys.exit(1)
