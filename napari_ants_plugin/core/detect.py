@@ -3,8 +3,8 @@ import numpy as np
 import zarr
 import pandas as pd
 from napari_ants_plugin.gui.widgets import crop_shapes_from_image
-from cells import remove_duplicate_cells
-from labeling import generate_countgd_labels
+from napari_ants_plugin.core.cells import remove_duplicate_cells
+from napari_ants_plugin.core.labeling import generate_countgd_labels
 from datetime import datetime
 from napari_ants_plugin.gui.widgets import normalize_shapes_and_get_bboxes
 
