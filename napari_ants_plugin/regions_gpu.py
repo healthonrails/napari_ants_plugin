@@ -286,46 +286,33 @@ def create_region_mapping(bg_atlas: BrainGlobeAtlas) -> Dict[int, Tuple[str, str
     return {int(row["id"]): (row["acronym"], row["name"]) for _, row in lookup_df.iterrows()}
 
 
-def add_region_info_to_points(df: pd.DataFrame, annotation: da.Array, bg_atlas: BrainGlobeAtlas) -> pd.DataFrame:
-    """
-    Fast version of add_region_info_to_points that loads the annotation array
-    into memory (if possible) and uses vectorized mapping for region info.
-    """
-    # Convert point coordinates to a NumPy array.
-    xyz = df[["z", "y", "x"]].to_numpy(dtype=int)
-    shape = annotation.shape
-    valid_mask = (
-        (xyz[:, 0] >= 0) & (xyz[:, 0] < shape[0]) &
-        (xyz[:, 1] >= 0) & (xyz[:, 1] < shape[1]) &
-        (xyz[:, 2] >= 0) & (xyz[:, 2] < shape[2])
-    )
+def add_region_info_to_points(df: pd.DataFrame, annotation: np.ndarray, bg_atlas: BrainGlobeAtlas) -> pd.DataFrame:
+    x = df["x"].to_numpy(dtype=int)
+    y = df["y"].to_numpy(dtype=int)
+    z = df["z"].to_numpy(dtype=int)
+    shape = annotation.shape  # (Z, Y, X)
+
+    valid_mask = (z >= 0) & (z < shape[0]) & (y >= 0) & (
+        y < shape[1]) & (x >= 0) & (x < shape[2])
     if not np.all(valid_mask):
-        logger.info(f"Filtered out {np.sum(~valid_mask)} out-of-bound points.")
-        df = df[valid_mask].copy()
-        xyz = xyz[valid_mask]
+        logger.info("Filtered out %d out-of-bound points.",
+                    np.sum(~valid_mask))
+    df = df.loc[valid_mask].copy()
+    x, y, z = x[valid_mask], y[valid_mask], z[valid_mask]
 
-    # Load the entire annotation array into a NumPy array (if it fits in memory).
-    annotation_np = annotation
-    # Use NumPy indexing to extract the region values for all points.
-    region_vals = annotation_np[xyz[:, 0], xyz[:, 1], xyz[:, 2]]
-
-    # Create the mapping from region ID to (acronym, name).
+    region_vals = annotation[z, y, x]
     mapping = create_region_mapping(bg_atlas)
-
-    # Use np.vectorize to apply the mapping in a vectorized manner.
-    # This will return two arrays: one for acronyms and one for names.
-    vectorized_map = np.vectorize(lambda r: mapping.get(r, (None, None)))
-    region_info = vectorized_map(region_vals)
-
-    # region_info is a tuple (acronym_array, name_array).
-    df["region_acronym"] = region_info[0]
-    df["region_name"] = region_info[1]
+    region_info = pd.Series(region_vals).map(mapping)
+    df["region_acronym"] = region_info.apply(
+        lambda x: x[0] if isinstance(x, tuple) else None)
+    df["region_name"] = region_info.apply(
+        lambda x: x[1] if isinstance(x, tuple) else None)
     return df
 
 
 def process_points(
     csv_path: str,
-    annotation: da.Array,
+    annotation: np.ndarray,
     bg_atlas: BrainGlobeAtlas
 ) -> pd.DataFrame:
     """
