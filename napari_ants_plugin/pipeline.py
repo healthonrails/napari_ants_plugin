@@ -294,7 +294,7 @@ class ImageProcessingPipeline:
     # -------------------------------------------------------------------------
     # Step 8: Launch Napari Viewer with Sparse ROI Extraction UI
     # -------------------------------------------------------------------------
-    def run_viewer(self) -> None:
+    def run_viewer(self,viewer=None) -> None:
         """
         Set up and launch the Napari viewer with sparse ROI extraction UI.
         Uses the processed outputs:
@@ -363,7 +363,8 @@ class ImageProcessingPipeline:
             df_points, margin=5)
 
         # Set up the Napari viewer.
-        viewer = napari.Viewer()
+        if viewer is None:
+            viewer = napari.Viewer()
         viewer.add_image(signal_image, name="Anatomical Reference",
                          colormap="gray", contrast_limits=(0, 8000))
 

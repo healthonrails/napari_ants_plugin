@@ -5,6 +5,7 @@ from napari.types import LayerDataTuple
 from napari import Viewer
 from skimage.io import imread, imsave
 import os
+from argparse import Namespace
 import numpy as np
 import json
 from datetime import datetime
@@ -15,6 +16,8 @@ from ..core.transform import transform_image  # noqa: F401 (if used elsewhere)
 from ..core.utils import log_score  # noqa: F401 (if used elsewhere)
 from ..core.labeling import generate_countgd_labels  # noqa: F401 (if used - important for CountGD)
 from ..core.cells import remove_duplicate_cells
+from napari_ants_plugin.pipeline import ImageProcessingPipeline, setup_logger, setup_output_folders
+
 # Globals
 label_layer = None
 current_label_type = None
@@ -614,7 +617,96 @@ def scoring_widget(viewer: Viewer,
     log_score(aligned_image_layer.name, score, comments)
 
 
+@magic_factory(
+    call_button="Run Pipeline",
+    background={"widget_type": "FileEdit",
+                "label": "Background Image", "mode": "r", "filter": "*.tif"},
+    signal={"widget_type": "FileEdit", "label": "Signal Image",
+            "mode": "r", "filter": "*.tif"},
+    atlas_name={
+        "choices": ["kim_mouse_25um", "allen_mouse_25um"],
+        "label": "Atlas Name",
+        "value": "kim_mouse_25um"
+    },
+    orientation={"label": "Orientation", "value": "ial"},
+    cell_prompt={"label": "Cell Prompt", "value": "cell"},
+    deduplication_radius={"label": "Deduplication Radius", "value": 5.0},
+    atlas_voxel_size={"label": "Atlas Voxel Size", "value": "25.0,25.0,25.0"},
+    raw_voxel_size={"label": "Raw Voxel Size", "value": "4.0,2.0,2.0"},
+    upsample_swap_xy={
+        "widget_type": "CheckBox",
+        "label": "Upsample Swap XY (Optional)",
+        "value": False,
+        "tooltip": "Optional: enable to swap X and Y axes during upsampling."
+    }
+)
+def run_pipeline_widget(
+    viewer: Viewer,
+    background: str,
+    signal: str,
+    atlas_name: str,
+    orientation: str,
+    cell_prompt: str,
+    deduplication_radius: float,
+    atlas_voxel_size: str,
+    raw_voxel_size: str,
+    upsample_swap_xy: bool,
+):
+    """
+    Widget to run the full image processing pipeline.
+
+    Notes:
+      - Output directory and log file are set internally to default values.
+      - Atlas Name is a dropdown with options "kim_mouse_25um" (default) and "allen_mouse_25um."
+      - Only Orientation is requested from the user; both the input orientation and source space are automatically set to the same value.
+      - Upsample Swap XY is optional.
+    """
+    # Set default values internally.
+    output_dir = "output_pipeline"
+    log_file = "pipeline.log"
+
+    # Create a configuration namespace similar to argparse.Namespace.
+    config = Namespace(
+        background=background,
+        signal=signal,
+        output_dir=output_dir,
+        log_file=log_file,
+        atlas_name=atlas_name,
+        orientation=orientation,
+        input_orientation=orientation,  # Set equal to orientation.
+        cell_prompt=cell_prompt,
+        deduplication_radius=deduplication_radius,
+        atlas_voxel_size=atlas_voxel_size,
+        raw_voxel_size=raw_voxel_size,
+        upsample_swap_xy=upsample_swap_xy,
+        src_space=orientation,          # Set equal to orientation.
+    )
+
+    # Set up output folders and the logger.
+    folders = setup_output_folders(config.output_dir)
+    if not os.path.isabs(config.log_file):
+        config.log_file = os.path.join(folders["logs"], config.log_file)
+    logger = setup_logger(config.log_file)
+
+    # Instantiate and run the pipeline.
+    pipeline = ImageProcessingPipeline(config=config, logger=logger)
+    try:
+        logger.info("Starting pipeline execution...")
+        pipeline.run()         # Execute processing steps 1-7.
+        pipeline.run_viewer(viewer=viewer)  # Launch Napari viewer (step 8).
+    except Exception as e:
+        logger.error(f"Pipeline execution failed: {e}")
+        return f"Pipeline execution failed: {e}"
+    return "Pipeline executed successfully."
+
 # --- Napari Plugin Registration ---
+
+
 def napari_widgets():
-    return [run_countgd_widget, save_roi_image_widget, save_labels_widget,
-            image_alignment_widget, image_transformation_widget, scoring_widget]
+    return [run_pipeline_widget,
+            run_countgd_widget,
+            save_roi_image_widget,
+            save_labels_widget,
+            image_alignment_widget,
+            image_transformation_widget,
+            scoring_widget]
