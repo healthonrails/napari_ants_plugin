@@ -109,12 +109,17 @@ class ImageProcessingPipeline:
             self.folders["intermediate"], f"{signal_basename}.zarr")
         self.downsampled_background_tif = os.path.join(
             self.folders["intermediate"], f"downsampled_{bg_basename}.tif")
+        # Atlas-related file now includes atlas_name
         self.registered_annotation = os.path.join(
-            self.folders["intermediate"], f"registered_{bg_basename}_annotation.tif")
+            self.folders["intermediate"],
+            f"registered_{bg_basename}_{self.config.atlas_name}_annotation.tif"
+        )
 
         # Final results.
         self.upsampled_annotation_zarr = os.path.join(
-            self.folders["results"], f"upsampled_{bg_basename}_annotation.zarr")
+            self.folders["results"],
+            f"upsampled_{bg_basename}_{self.config.atlas_name}_annotation.zarr"
+        )
         # For viewer purposes, set unsampled_annotation_zarr equal to the upsampled annotation.
         self.unsampled_annotation_zarr = self.upsampled_annotation_zarr
         # For cell labeling outputs:
@@ -122,11 +127,15 @@ class ImageProcessingPipeline:
             self.folders["results"], f"detected_cells_{signal_basename}.csv")
         self.unique_cells_csv = os.path.join(
             self.folders["results"], f"unique_cells_{signal_basename}.csv")
-        # Additional results.
+        # Atlas-related outputs: add atlas_name to file names.
         self.points_final_csv = os.path.join(
-            self.folders["results"], f"points_final_{signal_basename}.csv")
+            self.folders["results"],
+            f"points_final_{signal_basename}_{self.config.atlas_name}.csv"
+        )
         self.cell_counts_csv = os.path.join(
-            self.folders["results"], f"cell_counts_{signal_basename}.csv")
+            self.folders["results"],
+            f"cell_counts_{signal_basename}_{self.config.atlas_name}.csv"
+        )
 
     def run(self) -> None:
         """

@@ -20,7 +20,6 @@ Usage:
 import argparse
 import logging
 import os
-
 import dask.array as da
 import numpy as np
 import ants
@@ -254,7 +253,11 @@ def main() -> None:
 
     # Optionally, display the registration result.
     try:
-        ants.plot(fixed_img, transformed_annotation)
+        anno_dir = os.path.dirname(args.output_annotation)
+        quality_contriol_figure = os.path.join(
+            anno_dir, "registration_quality_control.png")
+        ants.plot(fixed_img, transformed_annotation,
+                  filename=quality_contriol_figure)
     except Exception as e:
         logging.warning(f"Could not display plot: {e}")
 
