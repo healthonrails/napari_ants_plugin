@@ -757,11 +757,16 @@ class RegionTreeWidget(QWidget):
             z_min, z_max, y_min, y_max, x_min, x_max = bbox
             try:
                 roi = self.signal_image[z_min:z_max, y_min:y_max, x_min:x_max]
+                roi_mask = self.dask_anno_gpu[z_min:z_max,
+                                              y_min:y_max, x_min:x_max]
+                roi_mask_np = roi_mask.compute() == selected_region
                 # If the ROI supports .compute(), call it; otherwise, use as is.
                 if hasattr(roi, "compute"):
                     extracted_region = roi.compute()
                 else:
                     extracted_region = roi
+
+                extracted_region = np.where(roi_mask_np, extracted_region, 0)
             except Exception as err:
                 logger.error(
                     "Error computing ROI from precomputed bounding box: %s", err)
@@ -786,8 +791,10 @@ class RegionTreeWidget(QWidget):
             extracted_region,
             name=region_label,
             colormap="gray",
-            contrast_limits=(np.min(extracted_region),
-                             np.max(extracted_region))
+            contrast_limits=(max(0, np.min(extracted_region)),
+                             min(8000, np.max(extracted_region))),
+            # Position the extracted region correctly.
+            translate=(z_min, y_min, x_min)
         )
 
     def on_item_clicked(self, item: QTreeWidgetItem, column: int) -> None:
