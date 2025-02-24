@@ -853,7 +853,7 @@ def main() -> None:
         return
 
     # Wrap annotation with Dask and set chunk sizes.
-    dask_anno_cpu = da.from_zarr(annotation_data_cpu, chunks=(64, 128, 128))
+    dask_anno_cpu = da.from_zarr(annotation_data_cpu, chunks=(1, 1024, 1024))
 
     # Transfer annotation data to GPU (lazily).
     logger.info("Transferring annotation data to GPU (lazily) ...")
