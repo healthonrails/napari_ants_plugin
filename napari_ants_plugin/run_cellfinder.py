@@ -14,8 +14,8 @@ from brainglobe_utils.IO.cells import save_cells, cells_to_csv
 # Default Configuration Constants
 # =============================================================================
 DEFAULT_MODEL = "resnet50_tv"
-DEFAULT_BATCH_SIZE = 64
-DEFAULT_N_FREE_CPUS = 2
+DEFAULT_BATCH_SIZE = 32
+DEFAULT_N_FREE_CPUS = 1
 DEFAULT_NETWORK_VOXEL_SIZES = [5, 1, 1]
 DEFAULT_CUBE_WIDTH = 50
 DEFAULT_CUBE_HEIGHT = 50
@@ -175,7 +175,13 @@ def run_detection(signal_array: da.Array, background_array: da.Array, voxel_size
     Returns:
         list: A list of detected cells.
     """
-    return cellfinder_run(signal_array, background_array, voxel_sizes)
+    return cellfinder_run(signal_array, background_array,
+                          batch_size=8,
+                          n_free_cpus=2,
+                          classification_batch_size=8,
+                          classification_torch_device='cuda',
+                          skip_classification=True,
+                          )
 
 
 def run_classification(

@@ -7,10 +7,11 @@ This pipeline performs the following steps:
   2. Downsample the background Zarr image (ensuring correct orientation).
   3. Register the atlas (moving image) to the downsampled background (fixed image).
   4. Upsample the transformed atlas annotation.
-  5. Run cellfinder for cell detection and classification.
-  6. Run CountGD-based cell labeling.
-  7. Remove duplicate cell detections.
-  8. Launch Napari viewer with sparse ROI extraction UI.
+  5. Run cellfinder for cell detection.
+  6. Optionally run cellfinder classification (skipped by default).
+  7. Run CountGD-based cell labeling.
+  8. Remove duplicate cell detections.
+  9. Launch Napari viewer with sparse ROI extraction UI.
 """
 
 import argparse
@@ -18,6 +19,8 @@ import logging
 import os
 import glob
 import sys
+import traceback
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -35,7 +38,7 @@ from cellfinder.core.main import main as cellfinder_run
 from cellfinder.core.classify import classify
 from cellfinder.core.tools.prep import prep_models
 from cellfinder.core.download.download import DEFAULT_DOWNLOAD_DIRECTORY
-from brainglobe_utils.IO.cells import save_cells, cells_to_csv
+from brainglobe_utils.IO.cells import save_cells, cells_to_csv, get_cells
 from brainglobe_atlasapi import BrainGlobeAtlas
 
 
@@ -44,15 +47,16 @@ def setup_output_folders(base_dir: str) -> dict:
     Create subfolders for logs, intermediate files, and final results.
     Returns a dictionary with the folder paths.
     """
+    base_path = Path(base_dir)
     folders = {
-        "base": base_dir,
-        "logs": os.path.join(base_dir, "logs"),
-        "intermediate": os.path.join(base_dir, "intermediate"),
-        "results": os.path.join(base_dir, "results"),
+        "base": base_path,
+        "logs": base_path / "logs",
+        "intermediate": base_path / "intermediate",
+        "results": base_path / "results",
     }
     for folder in folders.values():
-        os.makedirs(folder, exist_ok=True)
-    return folders
+        folder.mkdir(parents=True, exist_ok=True)
+    return {k: str(v) for k, v in folders.items()}
 
 
 def setup_logger(log_file: str) -> logging.Logger:
@@ -83,10 +87,11 @@ def check_file_exists(filepath: str) -> bool:
     Return True if the file or directory exists and is non-empty.
     For Zarr stores (directories), check for the existence of the mandatory 'zarr.json' file.
     """
-    if os.path.isdir(filepath):
-        return os.path.exists(os.path.join(filepath, 'zarr.json'))
+    path = Path(filepath)
+    if path.is_dir():
+        return (path / "zarr.json").exists()
     else:
-        return os.path.exists(filepath) and os.stat(filepath).st_size > 0
+        return path.exists() and path.stat().st_size > 0
 
 
 class ImageProcessingPipeline:
@@ -106,11 +111,8 @@ class ImageProcessingPipeline:
         Compute all output file paths based on the output subdirectories.
         Filenames are derived from the input file names.
         """
-        # Extract base names (without extension) from input files.
-        bg_basename = os.path.splitext(
-            os.path.basename(self.config.background))[0]
-        signal_basename = os.path.splitext(
-            os.path.basename(self.config.signal))[0]
+        bg_basename = Path(self.config.background).stem
+        signal_basename = Path(self.config.signal).stem
 
         # Intermediate files.
         self.zarr_background_path = os.path.join(
@@ -119,7 +121,6 @@ class ImageProcessingPipeline:
             self.folders["intermediate"], f"{signal_basename}.zarr")
         self.downsampled_background_tif = os.path.join(
             self.folders["intermediate"], f"downsampled_{bg_basename}.tif")
-        # Atlas-related file now includes atlas_name
         self.registered_annotation = os.path.join(
             self.folders["intermediate"],
             f"registered_{bg_basename}_{self.config.atlas_name}_annotation.tif"
@@ -130,14 +131,11 @@ class ImageProcessingPipeline:
             self.folders["results"],
             f"upsampled_{bg_basename}_{self.config.atlas_name}_annotation.zarr"
         )
-        # For viewer purposes, set unsampled_annotation_zarr equal to the upsampled annotation.
         self.unsampled_annotation_zarr = self.upsampled_annotation_zarr
-        # For CountGD-based cell labeling outputs:
         self.detected_cells_csv = os.path.join(
             self.folders["results"], f"detected_cells_{signal_basename}.csv")
         self.unique_cells_csv = os.path.join(
             self.folders["results"], f"unique_cells_{signal_basename}.csv")
-        # Atlas-related outputs: add atlas_name to file names.
         self.points_final_csv = os.path.join(
             self.folders["results"],
             f"points_final_{signal_basename}_{self.config.atlas_name}.csv"
@@ -146,7 +144,6 @@ class ImageProcessingPipeline:
             self.folders["results"],
             f"cell_counts_{signal_basename}_{self.config.atlas_name}.csv"
         )
-        # New cellfinder output paths:
         self.cellfinder_detected_xml = os.path.join(
             self.folders["results"], "detected_cells_cellfinder.xml")
         self.cellfinder_detected_csv = os.path.join(
@@ -166,9 +163,10 @@ class ImageProcessingPipeline:
         self._step_downsample_background()
         self._step_register_atlas()
         self._step_upsample_atlas()
-        self._step_run_cellfinder()  # Step 5: Run cellfinder
-        self._step_cell_labeling()   # Step 6: CountGD-based cell labeling
-        self._step_deduplicate_cells()  # Step 7: Deduplicate cells
+        # Cell detection and optionally classification.
+        self._step_run_cellfinder()
+        self._step_cell_labeling()
+        self._step_deduplicate_cells()
         self.logger.info("Pipeline completed successfully.")
 
     def _step_convert_background(self) -> None:
@@ -178,7 +176,7 @@ class ImageProcessingPipeline:
                 convert_tiff_to_zarr(self.config.background,
                                      self.zarr_background_path)
             except Exception as e:
-                self.logger.error(f"Background conversion failed: {e}")
+                self.logger.exception("Background conversion failed:")
                 sys.exit(1)
         else:
             self.logger.info(
@@ -190,7 +188,7 @@ class ImageProcessingPipeline:
                 self.logger.info("Step 2: Converting signal TIFF to Zarr")
                 convert_tiff_to_zarr(self.config.signal, self.zarr_signal_path)
             except Exception as e:
-                self.logger.error(f"Signal conversion failed: {e}")
+                self.logger.exception("Signal conversion failed:")
                 sys.exit(1)
         else:
             self.logger.info(
@@ -210,7 +208,7 @@ class ImageProcessingPipeline:
                     zarr_origin=self.config.input_orientation,
                 )
             except Exception as e:
-                self.logger.error(f"Downsampling failed: {e}")
+                self.logger.exception("Downsampling failed:")
                 sys.exit(1)
         else:
             self.logger.info(
@@ -231,7 +229,7 @@ class ImageProcessingPipeline:
                 run_registration()
                 sys.argv = argv_backup
             except Exception as e:
-                self.logger.error(f"Atlas registration failed: {e}")
+                self.logger.exception("Atlas registration failed:")
                 sys.exit(1)
         else:
             self.logger.info(
@@ -254,62 +252,89 @@ class ImageProcessingPipeline:
                 )
                 upsampler.run()
             except Exception as e:
-                self.logger.error(f"Atlas upsampling failed: {e}")
+                self.logger.exception("Atlas upsampling failed:")
                 sys.exit(1)
         else:
             self.logger.info(
                 "Step 5: Upsampled atlas exists; skipping upsampling.")
 
     def _step_run_cellfinder(self) -> None:
-        if not check_file_exists(self.cellfinder_detected_xml):
-            try:
+        """
+        Run cellfinder for cell detection. Optionally perform cell classification if
+        the --run_classification flag is set.
+        """
+        try:
+            if check_file_exists(self.cellfinder_detected_xml):
                 self.logger.info(
-                    "Step 5: Running cellfinder for cell detection and classification")
-                # Prepare model weights using default model settings.
+                    "Detected cells file already exists;")
+                if self.config.run_classification:
+                    self.logger.inf("loading detected cells...")
+                    detected_cells = get_cells(self.cellfinder_detected_xml)
+            else:
+                self.logger.info("Step 6: Running cellfinder detection")
                 model_name = "resnet50_tv"
                 self.logger.info("Preparing model weights for cellfinder...")
                 model_weights = prep_models(
                     None, DEFAULT_DOWNLOAD_DIRECTORY, model_name)
 
-                # Load signal and background arrays from Zarr stores.
                 self.logger.info(
                     "Loading signal and background arrays for cellfinder...")
                 signal_z = zarr.open(self.zarr_signal_path, mode="r")
                 background_z = zarr.open(self.zarr_background_path, mode="r")
-                # Assumes the dataset key is "data"
                 signal_array = da.from_zarr(signal_z["data"])
                 background_array = da.from_zarr(background_z["data"])
 
-                # Use default voxel sizes (in microns) for detection.
                 voxel_sizes = [4, 2, 2]
-
-                # Run cell detection.
                 self.logger.info("Running cellfinder detection...")
                 detected_cells = cellfinder_run(
-                    signal_array, background_array, voxel_sizes)
+                    signal_array,
+                    background_array,
+                    voxel_sizes,
+                    skip_classification=True,
+                )
                 save_cells(detected_cells, self.cellfinder_detected_xml)
                 cells_to_csv(detected_cells, self.cellfinder_detected_csv)
                 self.logger.info(
                     f"Cellfinder detected {len(detected_cells)} cells; results saved.")
 
-                # Run classification if any cells were detected.
-                if detected_cells:
+            if self.config.run_classification:
+                if check_file_exists(self.cellfinder_classified_xml):
+                    self.logger.info(
+                        "Classified cells file already exists; skipping classification.")
+                elif not detected_cells:
+                    self.logger.info(
+                        "No cells detected; skipping classification.")
+                else:
                     self.logger.info("Running cellfinder classification...")
+                    # Reload arrays if needed
+                    if 'signal_array' not in locals() or 'background_array' not in locals():
+                        self.logger.info(
+                            "Loading arrays for classification...")
+                        signal_z = zarr.open(self.zarr_signal_path, mode="r")
+                        background_z = zarr.open(
+                            self.zarr_background_path, mode="r")
+                        signal_array = da.from_zarr(signal_z["data"])
+                        background_array = da.from_zarr(background_z["data"])
+                    if 'model_weights' not in locals():
+                        self.logger.info(
+                            "Preparing model weights for classification...")
+                        model_weights = prep_models(
+                            None, DEFAULT_DOWNLOAD_DIRECTORY, model_name)
+                    voxel_sizes = [4, 2, 2]
                     classified_cells = classify.main(
                         detected_cells,
                         signal_array,
                         background_array,
-                        n_free_cpus=2,  # Default value; adjust if needed.
+                        n_free_cpus=2,
                         voxel_sizes=voxel_sizes,
-                        # Default network voxel sizes.
                         network_voxel_sizes=[5, 1, 1],
-                        batch_size=64,
+                        batch_size=8,
                         cube_height=50,
                         cube_width=50,
                         cube_depth=20,
                         trained_model=None,
                         model_weights=model_weights,
-                        network_depth="50"
+                        network_depth="50",
                     )
                     save_cells(classified_cells,
                                self.cellfinder_classified_xml)
@@ -317,28 +342,25 @@ class ImageProcessingPipeline:
                                  self.cellfinder_classified_csv)
                     self.logger.info(
                         "Cellfinder classification completed and results saved.")
-                else:
-                    self.logger.info(
-                        "No cells detected by cellfinder; skipping classification.")
-            except Exception as e:
-                self.logger.error(f"Cellfinder processing failed: {e}")
-                sys.exit(1)
-        else:
-            self.logger.info(
-                "Cellfinder results already exist; skipping cellfinder step.")
+            else:
+                self.logger.info(
+                    "Skipping cell classification as per configuration (default skip).")
+        except Exception as e:
+            self.logger.exception("Cellfinder processing failed:")
+            sys.exit(1)
 
     def _step_cell_labeling(self) -> None:
         if not check_file_exists(self.detected_cells_csv):
             try:
                 self.logger.info(
-                    "Step 6: Generating cell labels using CountGD")
+                    "Step 7: Generating cell labels using CountGD")
                 argv_backup = sys.argv.copy()
                 sys.argv = [sys.argv[0]]
                 from napari_ants_plugin.core.detect import run_countgd
                 result = run_countgd(
                     image_path=self.zarr_signal_path,
-                    shapes=None,  # Update if exemplar shapes are available
-                    label_type="points",  # or "bboxes" as needed
+                    shapes=None,
+                    label_type="points",
                     text_prompt=self.config.cell_prompt,
                     confidence_threshold=0.01,
                     current_z_slice_only=False,
@@ -350,36 +372,27 @@ class ImageProcessingPipeline:
                 self.logger.info(
                     f"Cell labeling completed. Detected {len(detected)} cells.")
             except Exception as e:
-                self.logger.error(f"Cell labeling failed: {e}")
+                self.logger.exception("Cell labeling failed:")
                 sys.exit(1)
         else:
             self.logger.info(
-                "Step 6: Cell labeling output exists; skipping labeling.")
+                "Step 7: Cell labeling output exists; skipping labeling.")
 
     def _step_deduplicate_cells(self) -> None:
         if not check_file_exists(self.unique_cells_csv):
             try:
-                self.logger.info("Step 7: Removing duplicate cell detections")
-                # Locate all CSV files matching 'detected_cells_*.csv' in the output folder.
+                self.logger.info("Step 8: Removing duplicate cell detections")
                 folder = os.path.dirname(self.detected_cells_csv)
                 pattern = os.path.join(folder, "detected_cells_*.csv")
                 csv_files = glob.glob(pattern)
                 self.logger.info(
                     f"Found {len(csv_files)} detected cell CSV files: {csv_files}")
 
-                # Merge all detected cell CSV files into a single DataFrame.
                 df_list = [pd.read_csv(f) for f in csv_files]
-                if df_list:
-                    df_detect = pd.concat(df_list, ignore_index=True)
-                else:
-                    df_detect = pd.DataFrame()
+                df_detect = pd.concat(df_list, ignore_index=True).drop_duplicates(
+                ) if df_list else pd.DataFrame()
 
-                # Drop exact duplicate rows before further processing.
-                df_detect = df_detect.drop_duplicates()
-
-                # Only proceed if the merged DataFrame is not empty.
                 if not df_detect.empty:
-                    # Remove duplicates based on cell locations.
                     unique_locations = remove_duplicate_cells(
                         cell_locations=df_detect[['z', 'y', 'x']].values,
                         cell_size_radius=self.config.deduplication_radius,
@@ -393,28 +406,18 @@ class ImageProcessingPipeline:
                     self.logger.info(
                         "No detected cell CSV files found to deduplicate.")
             except Exception as e:
-                self.logger.error(f"Cell deduplication failed: {e}")
+                self.logger.exception("Cell deduplication failed:")
                 sys.exit(1)
         else:
             self.logger.info(
-                "Step 7: Unique cell output exists; skipping deduplication.")
+                "Step 8: Unique cell output exists; skipping deduplication.")
 
-    # -------------------------------------------------------------------------
-    # Step 8: Launch Napari Viewer with Sparse ROI Extraction UI
-    # -------------------------------------------------------------------------
     def run_viewer(self, viewer=None) -> None:
         """
-        Set up and launch the Napari viewer with sparse ROI extraction UI.
-        Uses the processed outputs:
-          - Signal Zarr from self.zarr_signal_path,
-          - Annotation Zarr from self.unsampled_annotation_zarr,
-          - Processed points from self.unique_cells_csv,
-          - Additional outputs for points_final and cell counts.
-        The atlas is taken from --atlas_name.
+        Launch the Napari viewer with sparse ROI extraction UI using the processed outputs.
         """
         self.logger.info(
-            "Step 8: Launching Napari viewer with sparse ROI extraction UI")
-        # Import UI helper functions and widgets.
+            "Step 9: Launching Napari viewer with sparse ROI extraction UI")
         from napari_ants_plugin.regions_gpu import (
             FilteredLabels, RegionTreeWidget, create_overlay_label,
             setup_mouse_move_callback, add_points_layer, process_points,
@@ -423,19 +426,13 @@ class ImageProcessingPipeline:
         )
         import napari
 
-        # Load the atlas using the same name as provided in --atlas_name.
         atlas = BrainGlobeAtlas(self.config.atlas_name, check_latest=False)
-
-        # Load the signal image from the generated Zarr store.
         signal_z = zarr.open(self.zarr_signal_path, mode="r")
         signal_image = da.from_zarr(signal_z["data"])
-
-        # Load the annotation data from the unsampled annotation Zarr.
         anno_z = zarr.open(self.unsampled_annotation_zarr, mode="r")
         annotation_data = da.from_zarr(anno_z["data"], chunks=(1, 1024, 1024))
         dask_anno = annotation_data
 
-        # Process points using unique_cells_csv as the points input.
         if os.path.exists(self.unique_cells_csv) and not os.path.exists(self.points_final_csv):
             df_points = process_points(
                 self.unique_cells_csv, anno_z["data"], atlas)
@@ -446,7 +443,6 @@ class ImageProcessingPipeline:
                 f"Loading the existing points file {self.points_final_csv}")
             df_points = pd.read_csv(self.points_final_csv)
 
-        # Load or compute hierarchical cell counts.
         if os.path.exists(self.cell_counts_csv):
             self.logger.info(
                 f"Loading the existing cell count file {self.cell_counts_csv}.")
@@ -465,7 +461,6 @@ class ImageProcessingPipeline:
         region_bounding_boxes = compute_region_bounding_boxes_by_acronym(
             df_points, margin=5)
 
-        # Set up the Napari viewer.
         if viewer is None:
             viewer = napari.Viewer()
         viewer.add_image(signal_image, name="Anatomical Reference",
@@ -529,6 +524,9 @@ def parse_args() -> Any:
     parser.set_defaults(upsample_swap_xy=False)
     parser.add_argument("--src_space", type=str, default=None,
                         help="Optional source space for atlas mapping during upsampling.")
+    # by default, cell classification is skipped. Provide --run_classification to enable it.
+    parser.add_argument("--run_classification", action="store_true", default=False,
+                        help="If set, run the cell classification step (default is to skip classification).")
     return parser.parse_args()
 
 
@@ -540,8 +538,8 @@ def main() -> None:
     logger_inst = setup_logger(args.log_file)
 
     pipeline = ImageProcessingPipeline(config=args, logger=logger_inst)
-    pipeline.run()         # Steps 1-7: Processing pipeline
-    pipeline.run_viewer()  # Step 8: Launch Napari viewer with UI
+    pipeline.run()         # Steps 1-8: Processing pipeline
+    pipeline.run_viewer()  # Step 9: Launch Napari viewer with UI
 
 
 if __name__ == "__main__":
