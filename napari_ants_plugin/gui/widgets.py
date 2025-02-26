@@ -23,6 +23,7 @@ label_layer = None
 current_label_type = None
 exemplar_shapes_layer = None  # Stores the shapes layer for exemplar bbox drawing
 large_image_size = (100, 100, 100)
+TILE_SIZE = (512, 512)
 
 
 def crop_shapes_from_image(image, labeled_shapes=None, min_clip_value=0, max_clip_value=8000):
@@ -225,7 +226,8 @@ def run_countgd_widget(
             camera_center = viewer.camera.center
             print(f"Center of the camera: {camera_center}")
 
-            tile_size = (1024, 1024)  # (height, width)
+            tile_size = TILE_SIZE if TILE_SIZE is not None else (
+                1024, 1024)  # (height, width)
             overlap = (16, 16)        # (height, width)
             stride = (tile_size[0] - overlap[0], tile_size[1] - overlap[1])
 
@@ -241,6 +243,11 @@ def run_countgd_widget(
                         y_end = min(y + tile_size[0], height)
                         x_end = min(x + tile_size[1], width)
                         tile = slice_data[y:y_end, x:x_end]
+                        desired_height, desired_width = TILE_SIZE
+                        pad_height = max(0, desired_height - tile.shape[0])
+                        pad_width = max(0, desired_width - tile.shape[1])
+                        tile = np.pad(
+                            tile, ((0, pad_height), (0, pad_width)), mode='constant')
                         processed_tile = tile.clip(
                             min_clip_value, max_clip_value)
                         if processed_tile.max() > 0:
@@ -252,7 +259,7 @@ def run_countgd_widget(
                         current_x = 0
                         current_y = 0
                         row_max_height = 0
-                        tile_h, tile_w = tile_size
+                        tile_h, tile_w = tile.shape
                         tile_exemplar_boxes = []
 
                         for cei in cropped_examplar_imgs:
