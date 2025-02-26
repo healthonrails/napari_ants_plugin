@@ -3,12 +3,14 @@ import logging
 import os
 import zarr
 import dask.array as da
+import gc
+import time
 
 from cellfinder.core.main import main as cellfinder_run
 from cellfinder.core.classify import classify
 from cellfinder.core.tools.prep import prep_models
 from cellfinder.core.download.download import DEFAULT_DOWNLOAD_DIRECTORY
-from brainglobe_utils.IO.cells import save_cells, cells_to_csv
+from brainglobe_utils.IO.cells import save_cells, cells_to_csv, get_cells
 
 # =============================================================================
 # Default Configuration Constants
@@ -120,6 +122,18 @@ def parse_args():
         default=None,
         help="Path to a pre-trained model (optional).",
     )
+    parser.add_argument(
+        "--classification-batch-size",
+        type=int,
+        default=16,
+        help="Batch size for the classification stage.",
+    )
+    parser.add_argument(
+        "--classification-torch-device",
+        type=str,
+        default="cuda",
+        help="Torch device for classification (e.g., 'cpu' or 'cuda').",
+    )
     # New arguments for cell-related output files
     parser.add_argument(
         "--detected-cells-xml",
@@ -163,78 +177,48 @@ def load_dask_array_from_zarr(zarr_path: str, dataset_key: str = "data") -> da.A
     return da.from_zarr(z[dataset_key])
 
 
-def run_detection(signal_array: da.Array, background_array: da.Array, voxel_sizes: list) -> list:
+def run_detection(signal_array: da.Array, background_array: da.Array, voxel_sizes: list, n_free_cpus: int) -> list:
     """
-    Run cell detection using the cellfinder_run method.
+    Run cell detection using the cellfinder_run method with classification skipped.
 
     Parameters:
         signal_array (da.Array): The signal data as a Dask array.
         background_array (da.Array): The background data as a Dask array.
         voxel_sizes (list): Voxel sizes (in microns) for detection.
+        n_free_cpus (int): Number of CPUs to leave free.
 
     Returns:
         list: A list of detected cells.
     """
-    return cellfinder_run(signal_array, background_array,
-                          batch_size=8,
-                          n_free_cpus=2,
-                          classification_batch_size=8,
-                          classification_torch_device='cuda',
-                          skip_classification=True,
-                          )
-
-
-def run_classification(
-    detected_cells: list,
-    signal_array: da.Array,
-    background_array: da.Array,
-    n_free_cpus: int,
-    voxel_sizes: list,
-    network_voxel_sizes: list,
-    batch_size: int,
-    cube_height: int,
-    cube_width: int,
-    cube_depth: int,
-    trained_model,
-    model_weights,
-    network_depth: str,
-) -> list:
-    """
-    Run cell classification if there are any detected cells.
-
-    Parameters:
-        detected_cells (list): List of cells detected.
-        signal_array (da.Array): The signal data as a Dask array.
-        background_array (da.Array): The background data as a Dask array.
-        n_free_cpus (int): Number of free CPUs.
-        voxel_sizes (list): Voxel sizes for detection.
-        network_voxel_sizes (list): Network voxel sizes for classification.
-        batch_size (int): Batch size for classification.
-        cube_height (int): Cube height used in classification.
-        cube_width (int): Cube width used in classification.
-        cube_depth (int): Cube depth used in classification.
-        trained_model: Pre-trained model (optional).
-        model_weights: Prepared model weights for classification.
-        network_depth (str): Network depth configuration.
-
-    Returns:
-        list: A list of classified cells.
-    """
-    return classify.main(
-        detected_cells,
+    return cellfinder_run(
         signal_array,
         background_array,
-        n_free_cpus,
-        voxel_sizes,
-        network_voxel_sizes,
-        batch_size,
-        cube_height,
-        cube_width,
-        cube_depth,
-        trained_model,
-        model_weights,
-        network_depth,
+        voxel_sizes=voxel_sizes,
+        n_free_cpus=n_free_cpus,
+        skip_classification=True,
     )
+
+
+def create_detected_cells_callback(logger):
+    """
+    Creates a callback function that logs progress information about detected cells.
+
+    Parameters:
+        logger (logging.Logger): Logger instance to log progress.
+
+    Returns:
+        function: A callback function that logs the current progress.
+    """
+    start_time = time.time()
+
+    def detected_cells_callback(cells):
+        elapsed = time.time() - start_time
+        # Log the number of cells processed and the elapsed time.
+        logger.info("Detection progress: %d cells detected after %.2f seconds.", len(
+            cells), elapsed)
+        return cells
+
+    return detected_cells_callback
 
 
 # =============================================================================
@@ -249,71 +233,114 @@ def main():
     args = parse_args()
 
     # Prepare model weights
-    logger.info("Preparing model weights...")
-    model_weights = prep_models(None, DEFAULT_DOWNLOAD_DIRECTORY, args.model)
+    try:
+        logger.info("Preparing model weights...")
+        model_weights = prep_models(
+            None, DEFAULT_DOWNLOAD_DIRECTORY, args.model)
+    except Exception as e:
+        logger.error("Error preparing model weights: %s", str(e))
+        return
 
     # Load signal and background arrays from Zarr files
-    logger.info("Loading signal and background data...")
-    signal_array = load_dask_array_from_zarr(args.signal)
-    background_array = load_dask_array_from_zarr(args.background)
+    try:
+        logger.info("Loading signal and background data...")
+        signal_array = load_dask_array_from_zarr(args.signal)
+        background_array = load_dask_array_from_zarr(args.background)
+    except Exception as e:
+        logger.error("Error loading data: %s", str(e))
+        return
 
-    # Run cell detection
-    logger.info("Running cell detection...")
-    detected_cells = run_detection(
-        signal_array, background_array, args.voxel_sizes)
+    # Detection phase
+    if os.path.exists(args.detected_cells_xml):
+        logger.info("Skipping cell detection; file exists: %s",
+                    args.detected_cells_xml)
+        detected_cells = get_cells(args.detected_cells_xml)
+    else:
+        try:
+            logger.info("Running cell detection...")
+            detected_cells = run_detection(
+                signal_array, background_array, args.voxel_sizes, args.n_free_cpus)
+        except MemoryError as me:
+            logger.error("Memory error during detection: %s", str(me))
+            return
+        except Exception as e:
+            logger.error("Error during detection: %s", str(e))
+            return
 
     # Save detected cells if output files do not already exist
     if not os.path.exists(args.detected_cells_xml):
         save_cells(detected_cells, args.detected_cells_xml)
-        logger.info(f"Saved detected cells to {args.detected_cells_xml}.")
+        logger.info("Saved detected cells to %s.", args.detected_cells_xml)
     else:
         logger.info(
-            f"File {args.detected_cells_xml} already exists; skipping XML saving.")
+            "File %s already exists; skipping XML saving for detected cells.", args.detected_cells_xml)
 
     if not os.path.exists(args.detected_cells_csv):
         cells_to_csv(detected_cells, args.detected_cells_csv)
-        logger.info(f"Saved detected cells to {args.detected_cells_csv}.")
+        logger.info("Saved detected cells to %s.", args.detected_cells_csv)
     else:
         logger.info(
-            f"File {args.detected_cells_csv} already exists; skipping CSV saving.")
+            "File %s already exists; skipping CSV saving for detected cells.", args.detected_cells_csv)
 
-    logger.info(f"Detected {len(detected_cells)} cells.")
+    logger.info("Detected %d cells.", len(detected_cells))
 
-    # Run classification if cells are detected
+    # Create a progress-monitoring callback for detection/classification.
+    detected_cells_callback = create_detected_cells_callback(logger)
+
+    # Classification phase
     if detected_cells:
-        logger.info("Detected cells found. Running classification...")
-        classified_cells = run_classification(
-            detected_cells,
-            signal_array,
-            background_array,
-            args.n_free_cpus,
-            args.voxel_sizes,
-            args.network_voxel_sizes,
-            args.batch_size,
-            args.cube_height,
-            args.cube_width,
-            args.cube_depth,
-            args.trained_model,
-            model_weights,
-            args.network_depth,
-        )
+        try:
+            logger.info("Running classification on detected cells...")
+            classified_cells = cellfinder_run(
+                signal_array,
+                background_array,
+                voxel_sizes=args.voxel_sizes,
+                detected_cells=detected_cells,
+                classification_batch_size=args.classification_batch_size,
+                skip_detection=True,
+                classification_torch_device=args.classification_torch_device,
+                n_free_cpus=args.n_free_cpus,
+                model_weights=model_weights,
+                batch_size=args.batch_size,
+                trained_model=args.trained_model,
+                network_depth=args.network_depth,
+                cube_height=args.cube_height,
+                cube_depth=args.cube_depth,
+                cube_width=args.cube_width,
+                network_voxel_sizes=args.network_voxel_sizes,
+                detect_finished_callback=detected_cells_callback,
+            )
+        except MemoryError as me:
+            logger.error("Memory error during classification: %s", str(me))
+            return
+        except Exception as e:
+            logger.error("Error during classification: %s", str(e))
+            return
 
-        # Save classified cells if output files do not already exist
+        # Explicit memory cleanup after classification
+        gc.collect()
+        if args.classification_torch_device.lower().startswith("cuda"):
+            try:
+                import torch
+                torch.cuda.empty_cache()
+            except ImportError:
+                pass
+
         if not os.path.exists(args.classified_cells_xml):
             save_cells(classified_cells, args.classified_cells_xml)
-            logger.info(
-                f"Saved classified cells to {args.classified_cells_xml}.")
+            logger.info("Saved classified cells to %s.",
+                        args.classified_cells_xml)
         else:
             logger.info(
-                f"File {args.classified_cells_xml} already exists; skipping XML saving.")
+                "File %s already exists; skipping XML saving for classified cells.", args.classified_cells_xml)
 
         if not os.path.exists(args.classified_cells_csv):
             cells_to_csv(classified_cells, args.classified_cells_csv)
-            logger.info(
-                f"Saved classified cells to {args.classified_cells_csv}.")
+            logger.info("Saved classified cells to %s.",
+                        args.classified_cells_csv)
         else:
             logger.info(
-                f"File {args.classified_cells_csv} already exists; skipping CSV saving.")
+                "File %s already exists; skipping CSV saving for classified cells.", args.classified_cells_csv)
     else:
         logger.info("No cells detected. Skipping classification.")
 
