@@ -22,7 +22,10 @@ def run_countgd(image_path,
                 cell_size_radius=3.0,
                 min_clip_value=0,
                 max_clip_value=8000,
-                csv_output_path=None):
+                csv_output_path=None,
+                tile_size=(512, 512),
+                overlap=(16, 16),
+                ):
     """
     Run the CountGD detection algorithm on the provided image.
 
@@ -76,8 +79,6 @@ def run_countgd(image_path,
     if image.ndim == 3 and all(dim > large for dim, large in zip(image.shape, LARGE_IMAGE_SIZE)):
         # Tiling branch
         z_slices, height, width = image.shape
-        tile_size = (1024, 1024)
-        overlap = (16, 16)
         stride = (tile_size[0] - overlap[0], tile_size[1] - overlap[1])
 
         for z in range(z_slices):

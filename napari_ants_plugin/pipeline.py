@@ -144,13 +144,13 @@ class ImageProcessingPipeline:
             f"cell_counts_{signal_basename}_{self.config.atlas_name}.csv"
         )
         self.cellfinder_detected_xml = os.path.join(
-            self.folders["results"], "detected_cells_cellfinder.xml")
+            self.folders["results"], f"detected_cells_{signal_basename}_cellfinder.xml")
         self.cellfinder_detected_csv = os.path.join(
-            self.folders["results"], "detected_cells_cellfinder.csv")
+            self.folders["results"], f"detected_cells_{signal_basename}_cellfinder.csv")
         self.cellfinder_classified_xml = os.path.join(
-            self.folders["results"], "classified_cells_cellfinder.xml")
+            self.folders["results"], f"classified_cells_{signal_basename}_cellfinder.xml")
         self.cellfinder_classified_csv = os.path.join(
-            self.folders["results"], "classified_cells_cellfinder.csv")
+            self.folders["results"], f"classified_cells_{signal_basename}_cellfinder.csv")
 
     def run(self) -> None:
         """
@@ -262,6 +262,11 @@ class ImageProcessingPipeline:
         Run cellfinder for cell detection. Optionally perform cell classification if
         the --run_classification flag is set.
         """
+        # Skip detection if the flag is disabled.
+        if not self.config.run_cellfinder:
+            self.logger.info(
+                "Skipping cellfinder detection as per configuration.")
+            return
         try:
             if check_file_exists(self.cellfinder_detected_xml):
                 self.logger.info(
@@ -533,6 +538,10 @@ def parse_args() -> Any:
     # by default, cell classification is skipped. Provide --run_classification to enable it.
     parser.add_argument("--run_classification", action="store_true", default=False,
                         help="If set, run the cell classification step (default is to skip classification).")
+    # Add cellfinder detection flag: detection runs by default.
+    parser.add_argument("--no_run_cellfinder", dest="run_cellfinder", action="store_false",
+                        help="If set, skip the cellfinder detection step (cellfinder detection runs by default).")
+    parser.set_defaults(run_cellfinder=True)
     return parser.parse_args()
 
 
