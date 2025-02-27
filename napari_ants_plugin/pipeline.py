@@ -19,7 +19,6 @@ import logging
 import os
 import glob
 import sys
-import traceback
 from pathlib import Path
 from typing import Any
 
@@ -291,6 +290,7 @@ class ImageProcessingPipeline:
                     background_array,
                     voxel_sizes,
                     skip_classification=True,
+                    n_free_cpus=2,
                 )
                 save_cells(detected_cells, self.cellfinder_detected_xml)
                 cells_to_csv(detected_cells, self.cellfinder_detected_csv)
@@ -387,8 +387,13 @@ class ImageProcessingPipeline:
                 csv_files = glob.glob(pattern)
                 self.logger.info(
                     f"Found {len(csv_files)} detected cell CSV files: {csv_files}")
+                df_list = []
+                for f in csv_files:
+                    if 'cellfinder' not in f:
+                        df_list.append(pd.read_csv(f))
+                    else:
+                        df_list.append(pd.read_csv(f, usecols=['z', 'y', 'x']))
 
-                df_list = [pd.read_csv(f) for f in csv_files]
                 df_detect = pd.concat(df_list, ignore_index=True).drop_duplicates(
                 ) if df_list else pd.DataFrame()
 
@@ -463,10 +468,10 @@ class ImageProcessingPipeline:
 
         if viewer is None:
             viewer = napari.Viewer()
-        viewer.add_image(signal_image, name="Anatomical Reference",
+        viewer.add_image(signal_image, name="Signal",
                          colormap="gray", contrast_limits=(0, 8000))
         anno_layer = FilteredLabels(
-            dask_anno, name="Filtered Annotation", opacity=0.5)
+            dask_anno, name="Annotation", opacity=0.5)
         viewer.add_layer(anno_layer)
         region_tree = RegionTreeWidget(
             anno_layer=anno_layer,
@@ -478,6 +483,7 @@ class ImageProcessingPipeline:
             viewer=viewer,
             signal_image=signal_image,
             region_bounding_boxes=region_bounding_boxes,
+            df_points=df_points,
         )
         viewer.window.add_dock_widget(
             region_tree, name="Brain Structure Tree", area="right")
