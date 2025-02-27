@@ -198,7 +198,8 @@ def run_countgd_widget(
         print(f"Displayed Image size in World coordinates: {transform_shape}")
         contrast_limits = image_layer_select.contrast_limits
         print(f"Contrast Limits: {contrast_limits}")
-        min_clip_value, max_clip_value = contrast_limits
+        min_clip_value, max_clip_value = (
+            max(contrast_limits[0], 0), min(contrast_limits[1], 8000))
 
         # For 3D images, determine the current z slice index from viewer dims.
         current_z = int(
@@ -210,11 +211,17 @@ def run_countgd_widget(
         print(f"Cursor Position: {cursor_position}")
 
         # Get the exemplar shapes from the "Shapes" layer.
-        shapes_layer = viewer.layers['Shapes']
-        exemplar_points_from_shapes = normalize_shapes_and_get_bboxes(
-            shapes_layer.data, visible_image.shape[1], visible_image.shape[0])
+        shapes = None
+        try:
+            shapes_layer = viewer.layers['Shapes']
+            exemplar_points_from_shapes = normalize_shapes_and_get_bboxes(
+                shapes_layer.data, visible_image.shape[1], visible_image.shape[0])
+            shapes = shapes_layer.data
+            print(f"Shapes layer found with {len(shapes)} shapes.")
+        except Exception as e:
+            print(f"No shapes layer: {e}")
         cropped_examplar_imgs = crop_shapes_from_image(visible_image,
-                                                       shapes_layer.data,
+                                                       shapes,
                                                        min_clip_value=min_clip_value,
                                                        max_clip_value=max_clip_value
                                                        )
@@ -627,7 +634,7 @@ def scoring_widget(viewer: Viewer,
 @magic_factory(
     call_button="Run Pipeline",
     background={"widget_type": "FileEdit",
-                "label": "Background Image", "mode": "r", "filter": "*.tif"},
+                "label": "Background Image", "mode": "r", "filter": "*.tif,*.zarr"},
     signal={"widget_type": "FileEdit", "label": "Signal Image",
             "mode": "r", "filter": "*.tif"},
     atlas_name={
