@@ -553,6 +553,7 @@ class RegionGrowingDialog(QDialog):
 class RegionTreeWidget(QWidget):
     """
     A tree widget displaying brain regions that triggers ROI extraction on double-click.
+    Now also displays cell/point markers within the extracted ROI.
     """
 
     def __init__(
@@ -565,7 +566,8 @@ class RegionTreeWidget(QWidget):
         annotation_data_cpu: da.Array,
         viewer: napari.Viewer,
         signal_image: da.Array,
-        region_bounding_boxes: Dict[str, Tuple[int, int, int, int, int, int]]
+        region_bounding_boxes: Dict[str, Tuple[int, int, int, int, int, int]],
+        df_points: pd.DataFrame  # New parameter to pass cell/point data.
     ) -> None:
         super().__init__()
         self.anno_layer = anno_layer
@@ -579,6 +581,7 @@ class RegionTreeWidget(QWidget):
         # Precomputed from points.
         self.region_bounding_boxes = region_bounding_boxes
         self.mapping = create_region_mapping(self.bg_atlas)
+        self.df_points = df_points  # Store points data for later filtering.
         self.initUI()
 
     def initUI(self) -> None:
@@ -738,7 +741,7 @@ class RegionTreeWidget(QWidget):
     def on_item_double_clicked(self, item: QTreeWidgetItem, column: int) -> None:
         """
         When a region is double-clicked, extract that region from the anatomical reference.
-        First, attempt to use a precomputed bounding box from point data.
+        Then, filter and display the corresponding cell/point markers within the ROI.
         """
         try:
             selected_region = int(item.data(0, Qt.UserRole))
@@ -750,6 +753,8 @@ class RegionTreeWidget(QWidget):
         logger.info(f"Selected region id: {selected_region}")
         # Get region acronym from mapping.
         acr, _ = self.mapping.get(selected_region, (None, None))
+
+        # Determine the bounding box and extract ROI.
         if acr is not None and acr in self.region_bounding_boxes:
             bbox = self.region_bounding_boxes[acr]
             logger.info(
@@ -760,12 +765,10 @@ class RegionTreeWidget(QWidget):
                 roi_mask = self.dask_anno_gpu[z_min:z_max,
                                               y_min:y_max, x_min:x_max]
                 roi_mask_np = roi_mask.compute() == selected_region
-                # If the ROI supports .compute(), call it; otherwise, use as is.
                 if hasattr(roi, "compute"):
                     extracted_region = roi.compute()
                 else:
                     extracted_region = roi
-
                 extracted_region = np.where(roi_mask_np, extracted_region, 0)
             except Exception as err:
                 logger.error(
@@ -775,7 +778,6 @@ class RegionTreeWidget(QWidget):
                 return
             region_label = f"Extracted Region {acr}"
         else:
-            # Fallback to the slower ROI extraction method.
             logger.info(
                 "Falling back to full annotation-based ROI extraction.")
             extracted_region = extract_region_roi(
@@ -786,16 +788,52 @@ class RegionTreeWidget(QWidget):
                 QMessageBox.warning(
                     self, "Warning", "Region not found in annotation data.")
                 return
+            # For fallback, re-obtain the bounding box for filtering points.
+            _, bbox = get_bounding_box_mask(
+                self.dask_anno_gpu, [selected_region])
+            if bbox is None:
+                QMessageBox.warning(
+                    self, "Warning", "Could not determine bounding box for ROI points.")
+                return
+            z_min, z_max, y_min, y_max, x_min, x_max = bbox
 
+        # Add the extracted ROI image to the viewer.
         self.viewer.add_image(
             extracted_region,
             name=region_label,
             colormap="gray",
             contrast_limits=(max(0, np.min(extracted_region)),
                              min(8000, np.max(extracted_region))),
-            # Position the extracted region correctly.
             translate=(z_min, y_min, x_min)
         )
+
+        # ---- Filter and display points within the ROI ----
+        if not self.df_points.empty:
+            roi_points = self.df_points[
+                (self.df_points["z"] >= z_min) & (self.df_points["z"] < z_max) &
+                (self.df_points["y"] >= y_min) & (self.df_points["y"] < y_max) &
+                (self.df_points["x"] >= x_min) & (self.df_points["x"] < x_max)
+            ]
+            if not roi_points.empty:
+                # Adjust coordinates relative to the ROI origin.
+                roi_points_coords = roi_points[[
+                    'z', 'y', 'x']].to_numpy() - [z_min, y_min, x_min]
+                # Convert coordinates to integer indices for indexing the ROI mask.
+                indices = roi_points_coords.astype(int)
+                # Use the ROI mask to select only points inside the region.
+                inside_mask = roi_mask_np[indices[:, 0],
+                                          indices[:, 1], indices[:, 2]]
+                points_inside_roi = roi_points_coords[inside_mask]
+                # Add these points as a separate layer.
+                self.viewer.add_points(
+                    points_inside_roi,
+                    name="ROI Cells",
+                    size=5,
+                    face_color='red',
+                    border_color="white",
+                    translate=(z_min, y_min, x_min),
+                )
+        # ---------------------------------------------------------------
 
     def on_item_clicked(self, item: QTreeWidgetItem, column: int) -> None:
         try:
@@ -907,7 +945,7 @@ def main() -> None:
         dask_anno_cpu, name="Filtered Annotation", opacity=0.5)
     viewer.add_layer(anno_layer)
 
-    # Add the region tree widget (pass the precomputed bounding boxes).
+    # Add the region tree widget (pass the precomputed bounding boxes and cell points DataFrame).
     region_tree = RegionTreeWidget(
         anno_layer=anno_layer,
         bg_tree=atlas.structures.tree,
@@ -918,6 +956,7 @@ def main() -> None:
         viewer=viewer,
         signal_image=signal_image,
         region_bounding_boxes=region_bounding_boxes,
+        df_points=df_points  # Pass the points data.
     )
     viewer.window.add_dock_widget(
         region_tree, name="Brain Structure Tree (GPU, Single-Pass BBox)", area="right")
