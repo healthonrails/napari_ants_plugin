@@ -645,7 +645,13 @@ def scoring_widget(viewer: Viewer,
         "label": "Upsample Swap XY (Optional)",
         "value": False,
         "tooltip": "Optional: enable to swap X and Y axes during upsampling."
-    }
+    },
+    run_classification={
+        "widget_type": "CheckBox",
+        "label": "Run Classification",
+        "value": False,
+        "tooltip": "Enable to run cell classification for cellfinder."
+    },
 )
 def run_pipeline_widget(
     viewer: Viewer,
@@ -658,6 +664,7 @@ def run_pipeline_widget(
     atlas_voxel_size: str,
     raw_voxel_size: str,
     upsample_swap_xy: bool,
+    run_classification: bool,
 ):
     """
     Widget to run the full image processing pipeline.
@@ -687,6 +694,7 @@ def run_pipeline_widget(
         raw_voxel_size=raw_voxel_size,
         upsample_swap_xy=upsample_swap_xy,
         src_space=orientation,          # Set equal to orientation.
+        run_classification=run_classification,
     )
 
     # Set up output folders and the logger.
