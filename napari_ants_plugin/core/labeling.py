@@ -36,10 +36,10 @@ def generate_countgd_labels(image_roi, label_type='points',
                - label_type: 'points' or 'bboxes' (returned as a check).
     """
     # Print the ROI shape.
-    roi_shape = image_roi.shape if isinstance(
-        image_roi, np.ndarray) else image_roi.data.shape
-    print("CountGD running on ROI shape:",
-          roi_shape, f"with prompt: '{text_prompt}'")
+    # roi_shape = image_roi.shape if isinstance(
+    #     image_roi, np.ndarray) else image_roi.data.shape
+    # print("CountGD running on ROI shape:",
+    #       roi_shape, f"with prompt: '{text_prompt}'")
 
     # Extract the NumPy array from a Napari Image layer, if necessary.
     image_roi_np = image_roi.data if isinstance(
@@ -124,7 +124,7 @@ def generate_countgd_labels(image_roi, label_type='points',
                     [z_slice, center_y + offset_y, center_x + offset_x])
             else:
                 points.append([center_y, center_x])
-        print(f"Detected {len(points)} for prompt: '{text_prompt}'")
+        #print(f"Detected {len(points)} for prompt: '{text_prompt}'")
         return np.array(points), 'points'
 
     elif label_type == 'bboxes':

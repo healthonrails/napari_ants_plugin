@@ -2,6 +2,7 @@ import argparse
 import numpy as np
 import zarr
 import pandas as pd
+from tqdm import tqdm
 from napari_ants_plugin.gui.widgets import crop_shapes_from_image
 from napari_ants_plugin.core.cells import remove_duplicate_cells
 from napari_ants_plugin.core.labeling import generate_countgd_labels
@@ -23,7 +24,7 @@ def run_countgd(image_path,
                 min_clip_value=0,
                 max_clip_value=8000,
                 csv_output_path=None,
-                tile_size=(512, 512),
+                tile_size=(1024, 1024),
                 overlap=(16, 16),
                 ):
     """
@@ -81,7 +82,7 @@ def run_countgd(image_path,
         z_slices, height, width = image.shape
         stride = (tile_size[0] - overlap[0], tile_size[1] - overlap[1])
 
-        for z in range(z_slices):
+        for z in tqdm(range(z_slices)):
             if current_z_slice_only and z != current_z:
                 continue
             slice_data = image[z]
@@ -90,7 +91,16 @@ def run_countgd(image_path,
                     y_end = min(y + tile_size[0], height)
                     x_end = min(x + tile_size[1], width)
                     tile = slice_data[y:y_end, x:x_end]
+
+                    desired_height, desired_width = tile_size
+                    if tile.shape[0] < desired_height or tile.shape[1] < desired_width:
+                        pad_height = max(0, desired_height - tile.shape[0])
+                        pad_width = max(0, desired_width - tile.shape[1])
+                        tile = np.pad(
+                            tile, ((0, pad_height), (0, pad_width)), mode='constant')
+
                     processed_tile = tile.clip(min_clip_value, max_clip_value)
+
                     if processed_tile.max() > 0:
                         processed_tile = processed_tile / processed_tile.max()
                     processed_tile = processed_tile * 255
@@ -150,6 +160,8 @@ def run_countgd(image_path,
                                 inside_box = True
                         if not inside_box:
                             detected_cells.append(cell)
+            print(
+                f"Detected {len(detected_cells)} cells from slice {0} to {z}")
         if detected_cells:
             detected_cells = list(set(tuple(cell) for cell in detected_cells))
             detected_cells = remove_duplicate_cells(
