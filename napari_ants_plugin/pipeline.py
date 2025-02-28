@@ -272,7 +272,7 @@ class ImageProcessingPipeline:
                 self.logger.info(
                     "Detected cells file already exists;")
                 if self.config.run_classification:
-                    self.logger.inf("loading detected cells...")
+                    self.logger.info("loading detected cells...")
                     detected_cells = get_cells(self.cellfinder_detected_xml)
             else:
                 self.logger.info("Step 6: Running cellfinder detection")
@@ -321,6 +321,7 @@ class ImageProcessingPipeline:
                         signal_array = da.from_zarr(signal_z["data"])
                         background_array = da.from_zarr(background_z["data"])
                     if 'model_weights' not in locals():
+                        model_name = "resnet50_tv"
                         self.logger.info(
                             "Preparing model weights for classification...")
                         model_weights = prep_models(
@@ -333,7 +334,7 @@ class ImageProcessingPipeline:
                         n_free_cpus=2,
                         voxel_sizes=voxel_sizes,
                         network_voxel_sizes=[5, 1, 1],
-                        batch_size=8,
+                        batch_size=1024,
                         cube_height=50,
                         cube_width=50,
                         cube_depth=20,

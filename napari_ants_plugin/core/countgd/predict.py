@@ -15,6 +15,7 @@ warnings.filterwarnings("ignore")
 
 DEFAULT_CONF_THRESH = 0.23
 
+
 def get_device():
     torch.set_grad_enabled(False)
     if torch.cuda.is_available():
@@ -26,6 +27,7 @@ def get_device():
     print(f'Using device: {device}')
     return device
 
+
 class ObjectCounter:
     """
     A class for counting objects in images based on text prompts and optional visual exemplars.
@@ -33,15 +35,17 @@ class ObjectCounter:
     device = get_device()
 
     def __init__(self, model_path: str = "checkpoint_best_regular.pth",
-                 config_path: str = "cfg_app.py"
-                 ):
+                 config_path: str = "cfg_app.py",
+                 crop_enabled: bool = True,
+                 max_detections: int = 900):
         """
         Initializes the ObjectCounter with the model and configuration.
 
         Args:
             model_path: Path to the pretrained model checkpoint.
             config_path: Path to the configuration file.
-            device: Device to load the model onto.
+            crop_enabled: Whether to enable adaptive cropping when maximum detections are reached.
+            max_detections: The maximum count threshold before triggering adaptive cropping.
         """
         self.device = get_device()
         self.here = os.path.dirname(os.path.abspath(__file__))
@@ -78,6 +82,8 @@ class ObjectCounter:
 
         self.model = self._load_model(model_path, config_path, self.device)
         self.transform = self._build_transforms()
+        self.crop_enabled = crop_enabled
+        self.max_detections = max_detections
 
     def _build_transforms(self, size: int = 800, max_size: int = 1333) -> T.Compose:
         """Builds data transformations for image preprocessing."""
@@ -117,7 +123,8 @@ class ObjectCounter:
         build_func = MODULE_BUILD_FUNCS.get(args.modelname)
         model, _, _ = build_func(args)
 
-        checkpoint = torch.load(model_path, map_location="cpu",weights_only=False)["model"]
+        checkpoint = torch.load(
+            model_path, map_location="cpu", weights_only=False)["model"]
         model.load_state_dict(checkpoint, strict=False)
         model.to(device).eval()
         return model
@@ -187,6 +194,7 @@ class ObjectCounter:
         Returns:
             A list of detected bounding boxes in x1,y1,x2,y2 format.
         """
+        # Load the image
         if isinstance(image, str):
             image_pil = Image.open(image).convert("RGB")
         elif isinstance(image, Image.Image):
@@ -213,12 +221,14 @@ class ObjectCounter:
                     [box[0], box[1], 2.0, box[2], box[3], 3.0] for box in exemplar_boxes
                 ]
 
+        # Preprocess the main image
         input_image, _ = self.transform(
             image_pil, {"exemplars": torch.tensor([])})
         input_image = input_image.unsqueeze(0).to(self.device)
         exemplars_boxes_tensor = self._get_box_inputs(
             exemplar_prompts.get("points", []))
 
+        # Preprocess exemplar image if available
         input_image_exemplars = None
         exemplars_tensor = []
         if exemplar_prompts.get("image") is not None:
@@ -227,10 +237,10 @@ class ObjectCounter:
                 exemplar_image_pil, {
                     "exemplars": torch.tensor(exemplars_boxes_tensor)}
             )
-            input_image_exemplars = input_image_exemplars.unsqueeze(0).to(
-                self.device)
-            exemplars_tensor = [exemplars_transformed["exemplars"].to(
-                self.device)]
+            input_image_exemplars = input_image_exemplars.unsqueeze(
+                0).to(self.device)
+            exemplars_tensor = [
+                exemplars_transformed["exemplars"].to(self.device)]
 
         with torch.no_grad():
             model_output = self.model(
@@ -253,9 +263,67 @@ class ObjectCounter:
                 dim=-1) == len(ind_to_filter)
         else:
             box_mask = logits.max(dim=-1).values > confidence_threshold
-
         filtered_boxes = boxes[box_mask, :].cpu().numpy()
-        return self._convert_boxes_to_xyxy(image_pil, filtered_boxes)
+
+        # If the number of detections reaches the maximum threshold, apply adaptive cropping.
+        if self.crop_enabled and (filtered_boxes.shape[0] >= self.max_detections):
+            print(
+                "Detected high number of objects, applying adaptive cropping (simple quadrant crop)...")
+            width, height = image_pil.size
+            # Define four quadrants (top-left, top-right, bottom-left, bottom-right)
+            quadrants = [
+                (0, 0, width // 2, height // 2),
+                (width // 2, 0, width, height // 2),
+                (0, height // 2, width // 2, height),
+                (width // 2, height // 2, width, height)
+            ]
+            all_boxes = []
+            for (left, top, right, bottom) in quadrants:
+                crop_img = image_pil.crop((left, top, right, bottom))
+                crop_tensor, _ = self.transform(
+                    crop_img, {"exemplars": torch.tensor([])})
+                crop_tensor = crop_tensor.unsqueeze(0).to(self.device)
+                with torch.no_grad():
+                    crop_output = self.model(
+                        nested_tensor_from_tensor_list(crop_tensor),
+                        None,
+                        exemplars_tensor if len(
+                            exemplars_tensor) > 0 else None,
+                        [torch.tensor([0]).to(self.device)] * len(crop_tensor),
+                        captions=[text_prompt + " ."] * len(crop_tensor),
+                    )
+                crop_logits = crop_output["pred_logits"].sigmoid()[
+                    0][:, ind_to_filter]
+                crop_boxes = crop_output["pred_boxes"][0]
+                if keywords.strip():
+                    crop_box_mask = (crop_logits > confidence_threshold).sum(
+                        dim=-1) == len(ind_to_filter)
+                else:
+                    crop_box_mask = crop_logits.max(
+                        dim=-1).values > confidence_threshold
+                crop_filtered_boxes = crop_boxes[crop_box_mask, :].cpu(
+                ).numpy()
+
+                # Adjust the coordinates from the crop back to the original image.
+                crop_w = right - left
+                crop_h = bottom - top
+                for box in crop_filtered_boxes:
+                    # Convert normalized box (center_x, center_y, w, h) relative to crop dimensions to pixel coordinates.
+                    center_x = box[0] * crop_w
+                    center_y = box[1] * crop_h
+                    box_w = box[2] * crop_w
+                    box_h = box[3] * crop_h
+                    # Adjust center by the crop offset.
+                    center_x += left
+                    center_y += top
+                    x1 = int(center_x - box_w / 2)
+                    y1 = int(center_y - box_h / 2)
+                    x2 = int(center_x + box_w / 2)
+                    y2 = int(center_y + box_h / 2)
+                    all_boxes.append([x1, y1, x2, y2])
+            return all_boxes
+        else:
+            return self._convert_boxes_to_xyxy(image_pil, filtered_boxes)
 
 
 if __name__ == "__main__":
@@ -267,9 +335,9 @@ if __name__ == "__main__":
     pretrain_model_path = "checkpoint_best_regular.pth"
     config_path = "cfg_app.py"
 
-    # Initialize the object counter
+    # Initialize the object counter with adaptive cropping enabled.
     object_counter = ObjectCounter(
-        pretrain_model_path, config_path=config_path)
+        pretrain_model_path, config_path=config_path, crop_enabled=True, max_detections=900)
 
     # Get bounding boxes using image path
     detected_boxes_path = object_counter.count_objects(
