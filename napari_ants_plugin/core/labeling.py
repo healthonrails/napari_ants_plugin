@@ -124,7 +124,7 @@ def generate_countgd_labels(image_roi, label_type='points',
                     [z_slice, center_y + offset_y, center_x + offset_x])
             else:
                 points.append([center_y, center_x])
-        #print(f"Detected {len(points)} for prompt: '{text_prompt}'")
+        # print(f"Detected {len(points)} for prompt: '{text_prompt}'")
         return np.array(points), 'points'
 
     elif label_type == 'bboxes':
