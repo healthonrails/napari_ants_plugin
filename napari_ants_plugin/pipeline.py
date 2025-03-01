@@ -398,7 +398,10 @@ class ImageProcessingPipeline:
                     if 'cellfinder' not in f:
                         df_list.append(pd.read_csv(f))
                     else:
-                        df_list.append(pd.read_csv(f, usecols=['z', 'y', 'x']))
+                        df_cellfinder = pd.read_csv(f, usecols=['z', 'y', 'x'])
+                        self.logger.info(
+                            f"Loaded {len(df_cellfinder)} cell detections from {f} {df_cellfinder.columns, df_cellfinder.shape,df_cellfinder.head()}")
+                        df_list.append(df_cellfinder)
 
                 df_detect = pd.concat(df_list, ignore_index=True).drop_duplicates(
                 ) if df_list else pd.DataFrame()

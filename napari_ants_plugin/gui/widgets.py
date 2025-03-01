@@ -23,7 +23,7 @@ label_layer = None
 current_label_type = None
 exemplar_shapes_layer = None  # Stores the shapes layer for exemplar bbox drawing
 large_image_size = (100, 100, 100)
-TILE_SIZE = (512, 512)
+TILE_SIZE = (1024, 1024)
 
 
 def crop_shapes_from_image(image, labeled_shapes=None, min_clip_value=0, max_clip_value=8000):
