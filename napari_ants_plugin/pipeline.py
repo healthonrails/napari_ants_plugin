@@ -472,6 +472,10 @@ class ImageProcessingPipeline:
         region_bounding_boxes = compute_region_bounding_boxes_by_acronym(
             df_points, margin=5)
 
+        df_hierarchy = pd.DataFrame(list(hierarchical_counts.items()), columns=[
+                                    'acronym', 'cell_count'])
+        df_hierarchy.to_csv(self.cell_counts_csv, index=False)
+
         if viewer is None:
             viewer = napari.Viewer()
         viewer.add_image(signal_image, name="Signal",

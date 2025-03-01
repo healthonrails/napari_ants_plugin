@@ -2,7 +2,7 @@ import random
 import torch
 import os
 import gdown
-from PIL import Image
+from PIL import Image, ImageDraw
 import numpy as np
 import argparse
 from .util.slconfig import SLConfig
@@ -57,8 +57,7 @@ class ObjectCounter:
         if not os.path.exists(model_path):
             gdown.cached_download(self._REMOTE_MODEL_URL,
                                   model_path,
-                                  md5=self._MD5
-                                  )
+                                  md5=self._MD5)
 
         self._REMOTE_BERT_MODEL_URL = f"{self.annolid_git_repo}/model.safetensors"
         self._BERT_MD5 = "cd18ceb6b110c04a8033ce01de41b0b7"
@@ -67,8 +66,7 @@ class ObjectCounter:
         if not os.path.exists(self._BERT_MODEL_PATH):
             gdown.cached_download(self._REMOTE_BERT_MODEL_URL,
                                   self._BERT_MODEL_PATH,
-                                  md5=self._BERT_MD5
-                                  )
+                                  md5=self._BERT_MD5)
 
         self._REMOTE_GROUNDINGDINO_MODEL_URL = f"{self.annolid_git_repo}/groundingdino_swinb_cogcoor.pth"
         self._GROUNDINGDINO_MD5 = "611367df01ee834e3baa408f54d31f02"
@@ -77,8 +75,7 @@ class ObjectCounter:
         if not os.path.exists(self._GROUNDINGDINO_MODEL_PATH):
             gdown.cached_download(self._REMOTE_GROUNDINGDINO_MODEL_URL,
                                   self._GROUNDINGDINO_MODEL_PATH,
-                                  md5=self._GROUNDINGDINO_MD5
-                                  )
+                                  md5=self._GROUNDINGDINO_MD5)
 
         self.model = self._load_model(model_path, config_path, self.device)
         self.transform = self._build_transforms()
@@ -172,6 +169,14 @@ class ObjectCounter:
             xyxy_boxes.append([x1, y1, x2, y2])
         return xyxy_boxes
 
+    def _empty_nested_tensor(self):
+        """
+        Returns an empty NestedTensor to use in place of None.
+        The dummy tensor shape here is (0, 3, 1, 1) which may be adjusted to match model expectations.
+        """
+        dummy = torch.empty((0, 3, 1, 1), device=self.device)
+        return nested_tensor_from_tensor_list([dummy])
+
     def count_objects(
         self,
         image: Union[str, Image.Image],
@@ -194,15 +199,14 @@ class ObjectCounter:
         Returns:
             A list of detected bounding boxes in x1,y1,x2,y2 format.
         """
-        # Load the image
+        # Load the main image
         if isinstance(image, str):
             image_pil = Image.open(image).convert("RGB")
         elif isinstance(image, Image.Image):
             image_pil = image.convert("RGB")
         else:
             raise ValueError(
-                "image must be a file path (str) or a PIL Image object."
-            )
+                "image must be a file path (str) or a PIL Image object.")
 
         exemplar_prompts = {"image": None, "points": []}
         if exemplar_image:
@@ -213,8 +217,7 @@ class ObjectCounter:
                 exemplar_prompts["image"] = exemplar_image.convert("RGB")
             else:
                 raise ValueError(
-                    "exemplar_image must be a file path (str) or a PIL Image object."
-                )
+                    "exemplar_image must be a file path (str) or a PIL Image object.")
 
             if exemplar_boxes:
                 exemplar_prompts["points"] = [
@@ -225,8 +228,6 @@ class ObjectCounter:
         input_image, _ = self.transform(
             image_pil, {"exemplars": torch.tensor([])})
         input_image = input_image.unsqueeze(0).to(self.device)
-        exemplars_boxes_tensor = self._get_box_inputs(
-            exemplar_prompts.get("points", []))
 
         # Preprocess exemplar image if available
         input_image_exemplars = None
@@ -234,8 +235,8 @@ class ObjectCounter:
         if exemplar_prompts.get("image") is not None:
             exemplar_image_pil = exemplar_prompts["image"]
             input_image_exemplars, exemplars_transformed = self.transform(
-                exemplar_image_pil, {
-                    "exemplars": torch.tensor(exemplars_boxes_tensor)}
+                exemplar_image_pil, {"exemplars": torch.tensor(
+                    self._get_box_inputs(exemplar_prompts.get("points", [])))}
             )
             input_image_exemplars = input_image_exemplars.unsqueeze(
                 0).to(self.device)
@@ -246,15 +247,14 @@ class ObjectCounter:
             model_output = self.model(
                 nested_tensor_from_tensor_list(input_image),
                 nested_tensor_from_tensor_list(
-                    input_image_exemplars) if input_image_exemplars is not None else None,
-                exemplars_tensor,
+                    input_image_exemplars) if input_image_exemplars is not None else self._empty_nested_tensor(),
+                exemplars_tensor if len(exemplars_tensor) > 0 else None,
                 [torch.tensor([0]).to(self.device)] * len(input_image),
                 captions=[text_prompt + " ."] * len(input_image),
             )
 
         ind_to_filter = self._get_ind_to_filter(
-            text_prompt, model_output["token"][0].word_ids, keywords
-        )
+            text_prompt, model_output["token"][0].word_ids, keywords)
         logits = model_output["pred_logits"].sigmoid()[0][:, ind_to_filter]
         boxes = model_output["pred_boxes"][0]
 
@@ -265,12 +265,24 @@ class ObjectCounter:
             box_mask = logits.max(dim=-1).values > confidence_threshold
         filtered_boxes = boxes[box_mask, :].cpu().numpy()
 
-        # If the number of detections reaches the maximum threshold, apply adaptive cropping.
+        # Adaptive cropping branch: if detections are >= max_detections, process by quadrants.
         if self.crop_enabled and (filtered_boxes.shape[0] >= self.max_detections):
             print(
                 "Detected high number of objects, applying adaptive cropping (simple quadrant crop)...")
             width, height = image_pil.size
-            # Define four quadrants (top-left, top-right, bottom-left, bottom-right)
+
+            # Convert exemplar_boxes from normalized to full-image absolute coordinates.
+            exemplar_boxes_abs = []
+            if exemplar_boxes:
+                for box in exemplar_boxes:
+                    ex_left = int(box[0] * width)
+                    ex_top = int(box[1] * height)
+                    ex_right = int(box[2] * width)
+                    ex_bottom = int(box[3] * height)
+                    exemplar_boxes_abs.append(
+                        [ex_left, ex_top, ex_right, ex_bottom])
+
+            # Define four quadrants: (left, top, right, bottom)
             quadrants = [
                 (0, 0, width // 2, height // 2),
                 (width // 2, 0, width, height // 2),
@@ -278,17 +290,52 @@ class ObjectCounter:
                 (width // 2, height // 2, width, height)
             ]
             all_boxes = []
+
+            # Helper function to check if two boxes overlap.
+            def boxes_overlap(box1, box2):
+                # box format: [x1, y1, x2, y2]
+                inter_left = max(box1[0], box2[0])
+                inter_top = max(box1[1], box2[1])
+                inter_right = min(box1[2], box2[2])
+                inter_bottom = min(box1[3], box2[3])
+                return inter_left < inter_right and inter_top < inter_bottom
+
+            # Process each quadrant.
             for (left, top, right, bottom) in quadrants:
                 crop_img = image_pil.crop((left, top, right, bottom))
+                # Overlay exemplar patches on the crop to prevent counting them.
+                draw = ImageDraw.Draw(crop_img)
+                tile_exemplar_boxes = []
+                if exemplar_boxes_abs:
+                    for box in exemplar_boxes_abs:
+                        # Compute intersection between the exemplar box and this crop.
+                        inter_left = max(left, box[0])
+                        inter_top = max(top, box[1])
+                        inter_right = min(right, box[2])
+                        inter_bottom = min(bottom, box[3])
+                        if inter_left < inter_right and inter_top < inter_bottom:
+                            # Draw the patch on the crop (coordinates adjusted to the crop).
+                            draw.rectangle([inter_left - left, inter_top - top,
+                                            inter_right - left, inter_bottom - top],
+                                           fill=(0, 0, 0))
+                            tile_exemplar_boxes.append(box)
+                # Process the patched crop.
                 crop_tensor, _ = self.transform(
                     crop_img, {"exemplars": torch.tensor([])})
                 crop_tensor = crop_tensor.unsqueeze(0).to(self.device)
                 with torch.no_grad():
+                    if input_image_exemplars is not None and len(exemplars_tensor) > 0:
+                        replicated_exemplars = [
+                            exemplars_tensor[0]] * len(crop_tensor)
+                        exemplar_input = nested_tensor_from_tensor_list(
+                            input_image_exemplars)
+                    else:
+                        replicated_exemplars = None
+                        exemplar_input = self._empty_nested_tensor()
                     crop_output = self.model(
                         nested_tensor_from_tensor_list(crop_tensor),
-                        None,
-                        exemplars_tensor if len(
-                            exemplars_tensor) > 0 else None,
+                        exemplar_input,
+                        replicated_exemplars,
                         [torch.tensor([0]).to(self.device)] * len(crop_tensor),
                         captions=[text_prompt + " ."] * len(crop_tensor),
                     )
@@ -304,24 +351,34 @@ class ObjectCounter:
                 crop_filtered_boxes = crop_boxes[crop_box_mask, :].cpu(
                 ).numpy()
 
-                # Adjust the coordinates from the crop back to the original image.
+                # Adjust detection boxes from crop coordinates to full image coordinates.
                 crop_w = right - left
                 crop_h = bottom - top
                 for box in crop_filtered_boxes:
-                    # Convert normalized box (center_x, center_y, w, h) relative to crop dimensions to pixel coordinates.
-                    center_x = box[0] * crop_w
-                    center_y = box[1] * crop_h
+                    center_x = box[0] * crop_w + left
+                    center_y = box[1] * crop_h + top
                     box_w = box[2] * crop_w
                     box_h = box[3] * crop_h
-                    # Adjust center by the crop offset.
-                    center_x += left
-                    center_y += top
                     x1 = int(center_x - box_w / 2)
                     y1 = int(center_y - box_h / 2)
                     x2 = int(center_x + box_w / 2)
                     y2 = int(center_y + box_h / 2)
                     all_boxes.append([x1, y1, x2, y2])
-            return all_boxes
+            # Deduplicate detection boxes.
+            unique_boxes = [list(x) for x in set(tuple(b) for b in all_boxes)]
+            # Remove any detection box that overlaps with any exemplar box.
+            final_boxes = []
+            for det_box in unique_boxes:
+                overlap = False
+                for ex_box in exemplar_boxes_abs:
+                    if boxes_overlap(det_box, ex_box):
+                        overlap = True
+                        break
+                if not overlap:
+                    final_boxes.append(det_box)
+            print(
+                f"Adaptive cropping complete, detected {len(final_boxes)} objects.")
+            return final_boxes
         else:
             return self._convert_boxes_to_xyxy(image_pil, filtered_boxes)
 
@@ -330,7 +387,7 @@ if __name__ == "__main__":
     input_image_path = "strawberry.jpg"
     text_prompt = "blueberries"
     exemplar_image_path = "strawberry.jpg"
-    exemplar_boxes = [[0.1, 0.1, 0.2, 0.2]]
+    exemplar_boxes = [[0.1, 0.1, 0.2, 0.2]]  # normalized coordinates
 
     pretrain_model_path = "checkpoint_best_regular.pth"
     config_path = "cfg_app.py"
