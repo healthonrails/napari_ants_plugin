@@ -8,6 +8,7 @@ import os
 from argparse import Namespace
 import numpy as np
 import json
+from PIL import Image as PILImage
 from datetime import datetime
 
 # Make sure these are correctly implemented and accessible
@@ -26,18 +27,26 @@ large_image_size = (100, 100, 100)
 TILE_SIZE = (1024, 1024)
 
 
-def crop_shapes_from_image(image, labeled_shapes=None, min_clip_value=0, max_clip_value=8000):
+def crop_shapes_from_image(
+    image,
+    labeled_shapes=None,
+    min_clip_value=0,
+    max_clip_value=8000
+):
     """
-    Crops regions from an image based on labeled shapes and saves them to an exemplars folder
-    located in the parent directory of the current file. If the exemplars already exist and
-    match the number of shapes, they are loaded and returned.
+    Crops regions from an image based on labeled shapes and saves them to an
+    "exemplars" folder located in the parent directory of the current file,
+    using PNG format and PIL for loading/saving.
 
-    If labeled_shapes is None or an error occurs while processing a shape, the function logs
-    the issue and continues, always returning the cropped_images list (which may be empty).
+    If the exemplars already exist and match the number of shapes, they are
+    loaded and returned. If labeled_shapes is None or an error occurs while
+    processing a shape, the function logs the issue and continues, always
+    returning the cropped_images list (which may be empty).
 
     Args:
         image (np.ndarray): The input image (2D or 3D).
-        labeled_shapes (list of np.ndarray or None): List of shapes with coordinates in [z, y, x] format.
+        labeled_shapes (list of np.ndarray or None): List of shapes with
+            coordinates in [z, y, x] format.
         min_clip_value (int): Minimum intensity value for clipping.
         max_clip_value (int): Maximum intensity value for clipping.
 
@@ -59,20 +68,23 @@ def crop_shapes_from_image(image, labeled_shapes=None, min_clip_value=0, max_cli
     if not os.path.exists(exemplars_folder):
         os.makedirs(exemplars_folder)
 
-    # Look for saved exemplar images (assumed to be .tif files)
-    exemplar_files = sorted([f for f in os.listdir(
-        exemplars_folder) if f.endswith('.tif')])
+    # Look for saved exemplar images (assumed to be .png files)
+    exemplar_files = sorted(
+        [f for f in os.listdir(exemplars_folder) if f.endswith('.png')]
+    )
     if exemplar_files and len(exemplar_files) > 0:
         for file in exemplar_files:
             file_path = os.path.join(exemplars_folder, file)
             try:
-                cropped_images.append(imread(file_path))
+                with PILImage.open(file_path) as img:
+                    cropped_images.append(np.array(img))
             except Exception as e:
                 print(f"Error loading image {file_path}: {e}")
         print(
             f"Loaded {len(cropped_images)} exemplar images from '{exemplars_folder}'.")
 
-    # Process each shape individually, catching errors per shape so we always return cropped_images
+    # Process each shape individually, catching errors per shape
+    # so we always return cropped_images
     for idx, shape in enumerate(labeled_shapes):
         try:
             # Extract z, y, x coordinates (assumes shape is in Z, Y, X format)
@@ -95,11 +107,15 @@ def crop_shapes_from_image(image, labeled_shapes=None, min_clip_value=0, max_cli
                     cropped_image = image[z_slice, ymin:ymax, xmin:xmax]
                 else:
                     print(
-                        f"Warning: z_slice {z_slice} is out of bounds for image with shape {image.shape}. Skipping shape index {idx}.")
+                        f"Warning: z_slice {z_slice} is out of bounds for "
+                        f"image with shape {image.shape}. Skipping shape index {idx}."
+                    )
                     continue
             else:
                 print(
-                    f"Error: Unsupported image dimensions ({image.ndim}). Skipping shape index {idx}.")
+                    f"Error: Unsupported image dimensions ({image.ndim}). "
+                    f"Skipping shape index {idx}."
+                )
                 continue
 
             # Clip and normalize the cropped image
@@ -110,10 +126,16 @@ def crop_shapes_from_image(image, labeled_shapes=None, min_clip_value=0, max_cli
 
             # Generate a timestamp for the filename
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            # Save the cropped image to the exemplars folder with a timestamp in the filename
+            # Save the cropped image to the exemplars folder as a PNG
             exemplar_filename = os.path.join(
-                exemplars_folder, f"exemplar_{idx}_{timestamp}.tif")
-            imsave(exemplar_filename, cropped_image)
+                exemplars_folder, f"exemplar_{idx}_{timestamp}.png"
+            )
+
+            cropped_image_pil = PILImage.fromarray(
+                cropped_image.astype(np.uint8))
+            cropped_image_pil.save(exemplar_filename)
+
+            # Keep a copy as numpy array
             cropped_images.append(cropped_image)
         except Exception as e:
             print(f"Error cropping shape at index {idx}: {e}")
@@ -122,7 +144,6 @@ def crop_shapes_from_image(image, labeled_shapes=None, min_clip_value=0, max_cli
     print(
         f"Cropped and saved {len(cropped_images)} exemplar images to '{exemplars_folder}'.")
     return cropped_images
-
 # Function to normalize shapes and convert to bbox
 
 
