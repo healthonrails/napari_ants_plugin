@@ -3,9 +3,58 @@ import ants
 import logging
 from skimage.io import imsave
 import datetime
+import pandas as pd
 
 logger = logging.getLogger(__name__)  # Get the logger
 logger.setLevel(logging.INFO)  # Set the logging level
+
+
+def annotate_cells_with_regions(detected_cells, annotation_zarr_path, atlas_name, output_csv_path):
+    """
+    Annotate a list of detected cells with brain region names based on an annotation volume,
+    and save the results to a CSV file.
+
+    Parameters:
+      detected_cells (list): List of Cell objects. Each cell is expected to have attributes 
+                             'x', 'y', and 'z' (and optionally 'type').
+      annotation_zarr_path (str): Path to the Zarr store containing the annotation volume (under key "data").
+      atlas_name (str): Name of the atlas to use for region lookup.
+      output_csv_path (str): File path where the annotated cell data CSV will be saved.
+    """
+    import zarr
+    from brainglobe_atlasapi import BrainGlobeAtlas
+    from napari_ants_plugin.regions_gpu import add_region_info_to_points
+    # Convert the list of Cell objects into a DataFrame.
+    # Adjust the fields as needed.
+    cell_data = []
+    for cell in detected_cells:
+        cell_data.append({
+            "x": cell.x,
+            "y": cell.y,
+            "z": cell.z,
+            "cell_type": cell.type  # Optional; include if desired.
+        })
+    df_cells = pd.DataFrame(cell_data)
+
+    if df_cells.empty:
+        print("No cells to annotate.")
+        return
+
+    # Load the annotation volume from the Zarr store.
+    anno_z = zarr.open(annotation_zarr_path, mode="r")
+    # Assumes annotation is stored under the key "data".
+    # For large volumes consider lazy loading if needed.
+    annotation = anno_z["data"]
+
+    # Initialize the atlas instance.
+    atlas = BrainGlobeAtlas(atlas_name)
+
+    # Add region information to the DataFrame using your utility function.
+    df_annotated = add_region_info_to_points(df_cells, annotation, atlas)
+
+    # Save the annotated cell data to CSV.
+    df_annotated.to_csv(output_csv_path, index=False)
+    print(f"Annotated cells saved to {output_csv_path}")
 
 
 def create_result_directory(result_dir: str) -> str:

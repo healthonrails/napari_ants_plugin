@@ -103,6 +103,7 @@ class ImageProcessingPipeline:
         self.config = config
         self.folders = setup_output_folders(self.config.output_dir)
         self.logger = logger
+        self.signal_basename = Path(self.config.signal).stem
         self._setup_paths()
 
     def _setup_paths(self) -> None:
@@ -298,7 +299,17 @@ class ImageProcessingPipeline:
                     n_free_cpus=2,
                 )
                 save_cells(detected_cells, self.cellfinder_detected_xml)
-                cells_to_csv(detected_cells, self.cellfinder_detected_csv)
+
+            if os.path.exists(self.cellfinder_detected_csv):
+                self.logger.info(
+                    "Detected cells CSV already exists; skipping save.")
+            else:
+                from napari_ants_plugin.core.utils import annotate_cells_with_regions
+                detected_cells = get_cells(self.cellfinder_detected_xml)
+                annotate_cells_with_regions(detected_cells=detected_cells,
+                                            annotation_zarr_path=self.unsampled_annotation_zarr,
+                                            atlas_name=self.config.atlas_name,
+                                            output_csv_path=self.cellfinder_detected_csv)
                 self.logger.info(
                     f"Cellfinder detected {len(detected_cells)} cells; results saved.")
 
@@ -395,14 +406,20 @@ class ImageProcessingPipeline:
                     f"Found {len(csv_files)} detected cell CSV files: {csv_files}")
                 df_list = []
                 for f in csv_files:
-                    if 'cellfinder' not in f:
+                    # Skip cellfinder CSV if merge is disabled.
+                    if 'cellfinder' in f:
+                        if not self.config.merge_cellfinder:
+                            self.logger.info(
+                                f"Skipping cellfinder file {f} (merge disabled).")
+                            continue
+                        elif str(self.signal_basename) in f:
+                            df_cellfinder = pd.read_csv(
+                                f, usecols=['z', 'y', 'x'])
+                            self.logger.info(
+                                f"Loaded {len(df_cellfinder)} cell detections from {f}.")
+                            df_list.append(df_cellfinder)
+                    elif str(self.signal_basename) in f:
                         df_list.append(pd.read_csv(f))
-                    else:
-                        df_cellfinder = pd.read_csv(f, usecols=['z', 'y', 'x'])
-                        self.logger.info(
-                            f"Loaded {len(df_cellfinder)} cell detections from {f} {df_cellfinder.columns, df_cellfinder.shape,df_cellfinder.head()}")
-                        df_list.append(df_cellfinder)
-
                 df_detect = pd.concat(df_list, ignore_index=True).drop_duplicates(
                 ) if df_list else pd.DataFrame()
 
@@ -549,6 +566,9 @@ def parse_args() -> Any:
     # Add cellfinder detection flag: detection runs by default.
     parser.add_argument("--no_run_cellfinder", dest="run_cellfinder", action="store_false",
                         help="If set, skip the cellfinder detection step (cellfinder detection runs by default).")
+    # control merging cellfinder detection results.
+    parser.add_argument("--merge_cellfinder", action="store_true", default=False,
+                        help="If set, merge cellfinder detection results with the CountGD output. By default, cellfinder detections are not merged.")
     parser.set_defaults(run_cellfinder=True)
     return parser.parse_args()
 
