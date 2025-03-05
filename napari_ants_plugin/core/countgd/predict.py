@@ -303,25 +303,52 @@ class ObjectCounter:
             # Process each quadrant.
             for (left, top, right, bottom) in quadrants:
                 crop_img = image_pil.crop((left, top, right, bottom))
-                # Overlay exemplar patches on the crop to prevent counting them.
-                draw = ImageDraw.Draw(crop_img)
-                tile_exemplar_boxes = []
+                crop_w = right - left
+                crop_h = bottom - top
+                crop_exemplar_boxes = []  # to hold normalized exemplar boxes for this crop
+
+                # Arrange exemplar patches in a grid (starting at top-left of the crop).
+                current_x = 0
+                current_y = 0
+                max_row_height = 0
+                spacing = 5  # spacing between patches (in pixels)
                 if exemplar_boxes_abs:
                     for box in exemplar_boxes_abs:
-                        # Compute intersection between the exemplar box and this crop.
-                        inter_left = max(left, box[0])
-                        inter_top = max(top, box[1])
-                        inter_right = min(right, box[2])
-                        inter_bottom = min(bottom, box[3])
-                        if inter_left < inter_right and inter_top < inter_bottom:
-                            # Draw the patch on the crop (coordinates adjusted to the crop).
-                            draw.rectangle([inter_left - left, inter_top - top,
-                                            inter_right - left, inter_bottom - top],
-                                           fill=(0, 0, 0))
-                            tile_exemplar_boxes.append(box)
-                # Process the patched crop.
+                        # Extract the exemplar patch from the original full image.
+                        patch = image_pil.crop(
+                            (box[0], box[1], box[2], box[3]))
+                        patch_width, patch_height = patch.size
+
+                        # If the patch does not fit in the current row, move to the next row.
+                        if current_x + patch_width > crop_w:
+                            current_x = 0
+                            current_y += max_row_height + spacing
+                            max_row_height = 0
+
+                        # If the patch does not fit vertically in the crop, skip it.
+                        if current_y + patch_height > crop_h:
+                            continue
+
+                        # Paste the patch onto the crop image at the computed (current_x, current_y).
+                        crop_img.paste(patch, (current_x, current_y))
+
+                        # Save normalized coordinates of this pasted patch (for the transform).
+                        norm_x1 = current_x / crop_w
+                        norm_y1 = current_y / crop_h
+                        norm_x2 = (current_x + patch_width) / crop_w
+                        norm_y2 = (current_y + patch_height) / crop_h
+                        crop_exemplar_boxes.append(
+                            [norm_x1, norm_y1, norm_x2, norm_y2])
+
+                        # Update x position and row height for the grid.
+                        current_x += patch_width + spacing
+                        max_row_height = max(max_row_height, patch_height)
+
+                # Now pass the normalized exemplar boxes into the transform.
+                exemplar_tensor = torch.tensor(
+                    crop_exemplar_boxes) if crop_exemplar_boxes else torch.tensor([])
                 crop_tensor, _ = self.transform(
-                    crop_img, {"exemplars": torch.tensor([])})
+                    crop_img, {"exemplars": exemplar_tensor})
                 crop_tensor = crop_tensor.unsqueeze(0).to(self.device)
                 with torch.no_grad():
                     if input_image_exemplars is not None and len(exemplars_tensor) > 0:
@@ -339,6 +366,7 @@ class ObjectCounter:
                         [torch.tensor([0]).to(self.device)] * len(crop_tensor),
                         captions=[text_prompt + " ."] * len(crop_tensor),
                     )
+
                 crop_logits = crop_output["pred_logits"].sigmoid()[
                     0][:, ind_to_filter]
                 crop_boxes = crop_output["pred_boxes"][0]
@@ -352,8 +380,6 @@ class ObjectCounter:
                 ).numpy()
 
                 # Adjust detection boxes from crop coordinates to full image coordinates.
-                crop_w = right - left
-                crop_h = bottom - top
                 for box in crop_filtered_boxes:
                     center_x = box[0] * crop_w + left
                     center_y = box[1] * crop_h + top
@@ -363,7 +389,16 @@ class ObjectCounter:
                     y1 = int(center_y - box_h / 2)
                     x2 = int(center_x + box_w / 2)
                     y2 = int(center_y + box_h / 2)
-                    all_boxes.append([x1, y1, x2, y2])
+                    det_box = [x1, y1, x2, y2]
+
+                    # Check if this detected box overlaps with any exemplar box.
+                    overlap = False
+                    for ex_box in exemplar_boxes_abs:
+                        if boxes_overlap(det_box, ex_box):
+                            overlap = True
+                            break
+                    if not overlap:
+                        all_boxes.append(det_box)
             # Deduplicate detection boxes.
             unique_boxes = [list(x) for x in set(tuple(b) for b in all_boxes)]
             # Remove any detection box that overlaps with any exemplar box.

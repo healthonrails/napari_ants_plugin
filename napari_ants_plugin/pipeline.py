@@ -418,7 +418,7 @@ class ImageProcessingPipeline:
                             self.logger.info(
                                 f"Loaded {len(df_cellfinder)} cell detections from {f}.")
                             df_list.append(df_cellfinder)
-                    elif str(self.signal_basename) in f:
+                    elif str(self.signal_basename) in f and 'cellfinder' not in f:
                         df_list.append(pd.read_csv(f))
                 df_detect = pd.concat(df_list, ignore_index=True).drop_duplicates(
                 ) if df_list else pd.DataFrame()
@@ -545,7 +545,7 @@ def parse_args() -> Any:
                         help="Directory where pipeline outputs are saved.")
     parser.add_argument("--cell_prompt", type=str, default="cell",
                         help="Text prompt for cell counting.")
-    parser.add_argument("--deduplication_radius", type=float, default=5.0,
+    parser.add_argument("--deduplication_radius", type=float, default=3.0,
                         help="Radius for cell deduplication.")
     parser.add_argument("--log_file", type=str, default="pipeline.log",
                         help="Name of the pipeline log file.")
