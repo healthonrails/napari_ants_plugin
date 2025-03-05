@@ -208,6 +208,11 @@ class ObjectCounter:
             raise ValueError(
                 "image must be a file path (str) or a PIL Image object.")
 
+        def _is_center_in_box(det_return, ex_box):
+            center_x, center_y = det_return[0], det_return[1]
+            x1, y1, x2, y2 = ex_box
+            return x1 <= center_x <= x2 and y1 <= center_y <= y2
+
         exemplar_prompts = {"image": None, "points": []}
         if exemplar_image:
             if isinstance(exemplar_image, str):
@@ -390,11 +395,12 @@ class ObjectCounter:
                     x2 = int(center_x + box_w / 2)
                     y2 = int(center_y + box_h / 2)
                     det_box = [x1, y1, x2, y2]
+                    det_return = box.tolist()
 
                     # Check if this detected box overlaps with any exemplar box.
                     overlap = False
-                    for ex_box in exemplar_boxes_abs:
-                        if boxes_overlap(det_box, ex_box):
+                    for ex_box in crop_exemplar_boxes:
+                        if _is_center_in_box(det_return, ex_box):
                             overlap = True
                             break
                     if not overlap:
