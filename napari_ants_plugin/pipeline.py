@@ -535,7 +535,7 @@ def parse_args() -> Any:
                         help="Path to the background TIFF file.")
     parser.add_argument("--signal", type=str, required=True,
                         help="Path to the signal TIFF file.")
-    parser.add_argument("--atlas_name", type=str, default="allen_mouse_25um",
+    parser.add_argument("--atlas_name", type=str, default="kim_mouse_25um",
                         help="BrainGlobe atlas name (used for both processing and viewer).")
     parser.add_argument("--orientation", type=str, default="ial",
                         help="Target orientation for downsampling and registration.")
@@ -545,7 +545,7 @@ def parse_args() -> Any:
                         help="Directory where pipeline outputs are saved.")
     parser.add_argument("--cell_prompt", type=str, default="cell",
                         help="Text prompt for cell counting.")
-    parser.add_argument("--deduplication_radius", type=float, default=3.0,
+    parser.add_argument("--deduplication_radius", type=float, default=1.0,
                         help="Radius for cell deduplication.")
     parser.add_argument("--log_file", type=str, default="pipeline.log",
                         help="Name of the pipeline log file.")

@@ -334,8 +334,11 @@ class ObjectCounter:
                         if current_y + patch_height > crop_h:
                             continue
 
-                        # Paste the patch onto the crop image at the computed (current_x, current_y).
-                        crop_img.paste(patch, (current_x, current_y))
+                        if left == 0 and top == 0:
+                            current_y -= spacing
+                        else:
+                            # Paste the patch onto the crop image at the computed (current_x, current_y).
+                            crop_img.paste(patch, (current_x, current_y))
 
                         # Save normalized coordinates of this pasted patch (for the transform).
                         norm_x1 = current_x / crop_w
