@@ -335,7 +335,8 @@ class ObjectCounter:
                             continue
 
                         if left == 0 and top == 0:
-                            current_y -= spacing
+                            if current_x > patch_width + spacing - 2:
+                                current_x -= spacing
                         else:
                             # Paste the patch onto the crop image at the computed (current_x, current_y).
                             crop_img.paste(patch, (current_x, current_y))

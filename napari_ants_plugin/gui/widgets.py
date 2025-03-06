@@ -31,17 +31,15 @@ def crop_shapes_from_image(
     image,
     labeled_shapes=None,
     min_clip_value=0,
-    max_clip_value=8000
+    max_clip_value=8000,
+    use_saved_exemplars=True,
 ):
     """
-    Crops regions from an image based on labeled shapes and saves them to an
-    "exemplars" folder located in the parent directory of the current file,
-    using PNG format and PIL for loading/saving.
+    Crops regions from an image based on labeled shapes and optionally
+    loads previously saved exemplar images from disk.
 
-    If the exemplars already exist and match the number of shapes, they are
-    loaded and returned. If labeled_shapes is None or an error occurs while
-    processing a shape, the function logs the issue and continues, always
-    returning the cropped_images list (which may be empty).
+    If use_saved_exemplars is True and exemplar images exist, they are loaded.
+    Otherwise, the function processes the provided shapes directly.
 
     Args:
         image (np.ndarray): The input image (2D or 3D).
@@ -49,6 +47,7 @@ def crop_shapes_from_image(
             coordinates in [z, y, x] format.
         min_clip_value (int): Minimum intensity value for clipping.
         max_clip_value (int): Maximum intensity value for clipping.
+        use_saved_exemplars (bool): Whether to load saved exemplars from disk.
 
     Returns:
         list of np.ndarray: List of cropped (or loaded) image regions.
@@ -59,32 +58,30 @@ def crop_shapes_from_image(
         print("No labeled shapes provided. Nothing to crop.")
         labeled_shapes = []
 
-    # Determine the exemplars folder location:
+    # Define the exemplars folder regardless of use_saved_exemplars.
     current_file_dir = os.path.dirname(os.path.abspath(__file__))
     parent_dir = os.path.dirname(current_file_dir)
     exemplars_folder = os.path.join(parent_dir, "exemplars")
 
-    # Ensure the exemplars folder exists
-    if not os.path.exists(exemplars_folder):
-        os.makedirs(exemplars_folder)
+    # Optionally load exemplars from disk
+    if use_saved_exemplars:
+        if not os.path.exists(exemplars_folder):
+            os.makedirs(exemplars_folder)
+        exemplar_files = sorted(
+            [f for f in os.listdir(exemplars_folder) if f.endswith('.png')]
+        )
+        if exemplar_files:
+            for file in exemplar_files:
+                file_path = os.path.join(exemplars_folder, file)
+                try:
+                    with PILImage.open(file_path) as img:
+                        cropped_images.append(np.array(img))
+                except Exception as e:
+                    print(f"Error loading image {file_path}: {e}")
+            print(
+                f"Loaded {len(cropped_images)} exemplar images from '{exemplars_folder}'.")
 
-    # Look for saved exemplar images (assumed to be .png files)
-    exemplar_files = sorted(
-        [f for f in os.listdir(exemplars_folder) if f.endswith('.png')]
-    )
-    if exemplar_files and len(exemplar_files) > 0:
-        for file in exemplar_files:
-            file_path = os.path.join(exemplars_folder, file)
-            try:
-                with PILImage.open(file_path) as img:
-                    cropped_images.append(np.array(img))
-            except Exception as e:
-                print(f"Error loading image {file_path}: {e}")
-        print(
-            f"Loaded {len(cropped_images)} exemplar images from '{exemplars_folder}'.")
-
-    # Process each shape individually, catching errors per shape
-    # so we always return cropped_images
+    # Process each shape to crop regions from the image
     for idx, shape in enumerate(labeled_shapes):
         try:
             # Extract z, y, x coordinates (assumes shape is in Z, Y, X format)
@@ -92,14 +89,12 @@ def crop_shapes_from_image(
             y_coords = shape[:, 1]
             x_coords = shape[:, 2]
 
-            # Determine bounding box coordinates
             xmin = int(np.min(x_coords))
             ymin = int(np.min(y_coords))
             xmax = int(np.max(x_coords))
             ymax = int(np.max(y_coords))
-            z_slice = int(np.min(z_coords))  # Use min z for simplicity
+            z_slice = int(np.min(z_coords))  # Using the minimum z
 
-            # Crop image based on dimensions
             if image.ndim == 2:
                 cropped_image = image[ymin:ymax, xmin:xmax]
             elif image.ndim == 3:
@@ -107,18 +102,13 @@ def crop_shapes_from_image(
                     cropped_image = image[z_slice, ymin:ymax, xmin:xmax]
                 else:
                     print(
-                        f"Warning: z_slice {z_slice} is out of bounds for "
-                        f"image with shape {image.shape}. Skipping shape index {idx}."
-                    )
+                        f"Warning: z_slice {z_slice} out of bounds for image shape {image.shape}. Skipping shape index {idx}.")
                     continue
             else:
                 print(
-                    f"Error: Unsupported image dimensions ({image.ndim}). "
-                    f"Skipping shape index {idx}."
-                )
+                    f"Error: Unsupported image dimensions ({image.ndim}). Skipping shape index {idx}.")
                 continue
 
-            # Clip and normalize the cropped image
             cropped_image = np.clip(
                 cropped_image, min_clip_value, max_clip_value)
             if cropped_image.max() > 0:
@@ -126,7 +116,9 @@ def crop_shapes_from_image(
 
             # Generate a timestamp for the filename
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            # Save the cropped image to the exemplars folder as a PNG
+            # Ensure the folder exists before saving
+            if not os.path.exists(exemplars_folder):
+                os.makedirs(exemplars_folder)
             exemplar_filename = os.path.join(
                 exemplars_folder, f"exemplar_{idx}_{timestamp}.png"
             )
@@ -135,7 +127,6 @@ def crop_shapes_from_image(
                 cropped_image.astype(np.uint8))
             cropped_image_pil.save(exemplar_filename)
 
-            # Keep a copy as numpy array
             cropped_images.append(cropped_image)
         except Exception as e:
             print(f"Error cropping shape at index {idx}: {e}")
@@ -144,9 +135,9 @@ def crop_shapes_from_image(
     print(
         f"Cropped and saved {len(cropped_images)} exemplar images to '{exemplars_folder}'.")
     return cropped_images
+
+
 # Function to normalize shapes and convert to bbox
-
-
 def normalize_shapes_and_get_bboxes(shapes, img_width, img_height):
     normalized_bboxes = []
     print("labeled shapes :", shapes)
@@ -177,6 +168,9 @@ def normalize_shapes_and_get_bboxes(shapes, img_width, img_height):
     current_z_slice_only={"widget_type": "CheckBox",
                           "label": "Current Z Slice Only", "value": False},
     cell_size_radius={"label": "Cell size radius", "value": 3.0},
+    use_saved_exemplars={"widget_type": "CheckBox",
+                         "label": "Use Saved Exemplars", "value": True},
+
 )
 def run_countgd_widget(
     viewer: Viewer,
@@ -185,6 +179,7 @@ def run_countgd_widget(
     confidence_threshold: float = 0.01,
     current_z_slice_only: bool = False,
     cell_size_radius: float = 3.0,
+    use_saved_exemplars: bool = True,
 ):
     """
     Plugin to run CountGD on the visible portion of the active image.
@@ -195,6 +190,8 @@ def run_countgd_widget(
       - The counting function is called using the visible image and the provided caption.
       - If exemplar boxes (or points) were added, those points are filtered out of the detected cells.
       - Detected points (with duplicates removed) are saved to a CSV file.
+      - The option 'Use Saved Exemplars' controls whether to load previously saved exemplar images
+    or to crop new exemplar images directly from the shapes layer.
     """
     global label_layer, current_label_type, exemplar_shapes_layer
     current_label_type = label_type
@@ -244,7 +241,8 @@ def run_countgd_widget(
         cropped_examplar_imgs = crop_shapes_from_image(visible_image,
                                                        shapes,
                                                        min_clip_value=min_clip_value,
-                                                       max_clip_value=max_clip_value
+                                                       max_clip_value=max_clip_value,
+                                                       use_saved_exemplars=use_saved_exemplars,
                                                        )
 
         # Decide whether to process the image by tiling or as a whole.
