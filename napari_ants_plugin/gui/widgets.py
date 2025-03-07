@@ -350,8 +350,8 @@ def run_countgd_widget(
             if len(detected_cells) > 0:
                 detected_cells = list(
                     set([tuple(cell) for cell in detected_cells]))
-                detected_cells = remove_duplicate_cells(
-                    detected_cells, cell_size_radius=cell_size_radius)
+                # detected_cells = remove_duplicate_cells(
+                #     detected_cells, cell_size_radius=cell_size_radius)
                 points = np.array(detected_cells)
                 points = np.unique(points, axis=0)
                 print("Total number of cells detected:", len(detected_cells))

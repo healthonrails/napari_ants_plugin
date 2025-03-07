@@ -162,14 +162,14 @@ def run_countgd(image_path,
                             detected_cells.append(cell)
             print(
                 f"Detected {len(detected_cells)} cells from slice {0} to {z}")
-        if detected_cells:
-            detected_cells = list(set(tuple(cell) for cell in detected_cells))
-            detected_cells = remove_duplicate_cells(
-                detected_cells, cell_size_radius=cell_size_radius)
-            points = np.array(detected_cells)
-            points = np.unique(points, axis=0)
-            print("Total number of cells detected:", len(points))
-            detected_cells = points.tolist()
+        # if detected_cells:
+        #     detected_cells = list(set(tuple(cell) for cell in detected_cells))
+        #     detected_cells = remove_duplicate_cells(
+        #         detected_cells, cell_size_radius=cell_size_radius)
+        #     points = np.array(detected_cells)
+        #     points = np.unique(points, axis=0)
+        #     print("Total number of cells detected:", len(points))
+        #     detected_cells = points.tolist()
 
     else:
         # Non-tiling branch: process the entire image.

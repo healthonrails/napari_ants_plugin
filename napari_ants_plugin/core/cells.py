@@ -5,6 +5,75 @@ import glob
 import pandas as pd
 
 
+def group_duplicate_points(cell_locations, cell_size_radius=3.0):
+    """
+    Group points that are within cell_size_radius of each other.
+
+    This function assigns a group ID to each point (given as (z, y, x) coordinates).
+    Points are grouped together if they are within cell_size_radius of one another,
+    even if the connection is transitive (A near B and B near C implies A, B, C in one group).
+
+    Parameters:
+        cell_locations (list or numpy.ndarray): Iterable of points, each as (z, y, x).
+        cell_size_radius (float): The radius for considering two points as duplicates.
+
+    Returns:
+        list of tuples: Each tuple is (point, group_id), where point is a (z, y, x) tuple.
+    """
+    # Convert input to a 2D numpy array of floats.
+    points = np.asarray(cell_locations, dtype=np.float64)
+    if points.ndim == 1 and len(points) == 3:
+        points = points.reshape(1, -1)
+    if points.ndim != 2 or points.shape[1] != 3:
+        raise ValueError(
+            "cell_locations must be array-like with shape (N, 3).")
+
+    n_points = points.shape[0]
+    if n_points == 0:
+        return []
+
+    # Build KD-tree for fast neighbor queries.
+    tree = KDTree(points)
+
+    # Initialize union-find (disjoint set) structure.
+    parent = np.arange(n_points)
+
+    def find(x):
+        # Find the root of x with path compression.
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(x, y):
+        # Merge the sets containing x and y.
+        root_x = find(x)
+        root_y = find(y)
+        if root_x != root_y:
+            parent[root_y] = root_x
+
+    # Union all points that are within the cell_size_radius.
+    for i in range(n_points):
+        # Get indices of all points within the specified radius of point i.
+        neighbors = tree.query_ball_point(points[i], r=cell_size_radius)
+        for j in neighbors:
+            union(i, j)
+
+    # Assign a unique group ID for each connected component.
+    group_map = {}
+    group_ids = np.empty(n_points, dtype=int)
+    current_group = 0
+    for i in range(n_points):
+        root = find(i)
+        if root not in group_map:
+            group_map[root] = current_group
+            current_group += 1
+        group_ids[i] = group_map[root]
+
+    # Return the points paired with their group IDs.
+    return [(tuple(points[i]), group_ids[i]) for i in range(n_points)]
+
+
 def remove_duplicate_cells(cell_locations, cell_size_radius=1.0):
     """
     Efficiently removes duplicate cell locations from a list of (z, y, x) coordinates,

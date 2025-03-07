@@ -28,7 +28,7 @@ from napari_ants_plugin.io.tiff2zarr import convert_tiff_to_zarr
 from napari_ants_plugin.io.downsample_gpu import downsample_zarr
 from napari_ants_plugin.io.register_atlas_to_downsampled import main as run_registration
 from napari_ants_plugin.io.upsample import AtlasUpsampler
-from napari_ants_plugin.core.cells import remove_duplicate_cells
+from napari_ants_plugin.core.cells import remove_duplicate_cells, group_duplicate_points
 
 # Additional imports for the cellfinder integration
 import zarr
@@ -424,15 +424,22 @@ class ImageProcessingPipeline:
                 ) if df_list else pd.DataFrame()
 
                 if not df_detect.empty:
-                    unique_locations = remove_duplicate_cells(
+                    # Group duplicate points and assign a group id to each point.
+                    grouped_points = group_duplicate_points(
                         cell_locations=df_detect[['z', 'y', 'x']].values,
                         cell_size_radius=self.config.deduplication_radius,
                     )
+                    # grouped_points is a list of tuples: ((z, y, x), group_id)
+                    # Create a DataFrame including the group_id.
                     df_out = pd.DataFrame(
-                        unique_locations, columns=['z', 'y', 'x'])
+                        [(z, y, x, group_id)
+                         for (z, y, x), group_id in grouped_points],
+                        columns=['z', 'y', 'x', 'group_id']
+                    )
                     df_out.to_csv(self.unique_cells_csv, index=False)
                     self.logger.info(
-                        f"Unique cell locations saved to: {self.unique_cells_csv}")
+                        f"Unique cell locations with group IDs saved to: {self.unique_cells_csv}"
+                    )
                 else:
                     self.logger.info(
                         "No detected cell CSV files found to deduplicate.")
@@ -481,8 +488,11 @@ class ImageProcessingPipeline:
             group_counts = {row["acronym"]: row["cell_count"]
                             for row in hierarchical_df.to_dict("records")}
         else:
+            if 'group_id' in df_points.columns:
+                df_unique_points = df_points.groupby(
+                    'group_id').first().reset_index(drop=True)
             save_cell_counts_by_region(
-                df_points, atlas, output_file=self.cell_counts_csv)
+                df_unique_points, atlas, output_file=self.cell_counts_csv)
             hierarchical_df = pd.read_csv(self.cell_counts_csv)
             group_counts = {row["acronym"]: row["cell_count"]
                             for row in hierarchical_df.to_dict("records")}
