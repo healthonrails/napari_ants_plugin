@@ -125,6 +125,9 @@ class ImageProcessingPipeline:
             self.folders["intermediate"],
             f"registered_{bg_basename}_{self.config.atlas_name}_annotation.tif"
         )
+        # Region volumes CSV output.
+        self.region_volumes_csv = os.path.join(self.folders["results"],
+                                               f"region_volumes_{bg_basename}_{self.config.atlas_name}.csv")
 
         # Final results.
         self.upsampled_annotation_zarr = os.path.join(
@@ -162,6 +165,7 @@ class ImageProcessingPipeline:
         self._step_convert_signal()
         self._step_downsample_background()
         self._step_register_atlas()
+        self._step_calculate_region_volumes()
         self._step_upsample_atlas()
         # Cell detection and optionally classification.
         self._step_run_cellfinder()
@@ -234,6 +238,35 @@ class ImageProcessingPipeline:
         else:
             self.logger.info(
                 "Step 4: Registered atlas exists; skipping registration.")
+
+    def _step_calculate_region_volumes(self) -> None:
+        """
+        Calculate region volumes using the registered atlas annotation.
+        """
+        if not check_file_exists(self.region_volumes_csv):
+            from napari_ants_plugin.volumes import calculate_region_volumes
+            if not os.path.exists(self.registered_annotation) or os.stat(self.registered_annotation).st_size == 0:
+                self.logger.error(
+                    "Registered annotation not found or is empty; cannot calculate region volumes.")
+            try:
+                self.logger.info(
+                    "Step 4.5: Calculating region volumes from registered annotation")
+                # Parse atlas voxel size (in um) from config and convert to mm.
+                atlas_voxel_size = tuple(
+                    x / 1000.0 for x in map(float, self.config.atlas_voxel_size.split(',')))
+                atlas = BrainGlobeAtlas(
+                    self.config.atlas_name, check_latest=False)
+                df_volumes = calculate_region_volumes(
+                    self.registered_annotation, atlas, atlas_voxel_size)
+                region_volumes_csv = self.region_volumes_csv
+                df_volumes.to_csv(region_volumes_csv, index=False)
+                self.logger.info(
+                    f"Region volumes calculated and saved to: {region_volumes_csv}")
+            except Exception as e:
+                self.logger.exception("Region volume calculation failed:")
+        else:
+            self.logger.info(
+                "Step 4.5: Region volumes CSV exists; skipping calculation.")
 
     def _step_upsample_atlas(self) -> None:
         if not check_file_exists(self.upsampled_annotation_zarr):
