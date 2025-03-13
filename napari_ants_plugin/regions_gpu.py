@@ -555,9 +555,11 @@ class RegionTreeWidget(QWidget):
     A tree widget displaying brain regions that triggers ROI extraction on double-click.
     Now also displays cell/point markers within the extracted ROI.
 
-    It also displays cell counts and, if available,
-    cell density information. Works both with hierarchical_counts as just counts (int)
-    or as a tuple (cell_count, cell_density).
+    A tree widget displaying brain regions with cell counts, and if available,
+    volume and cell density. It supports hierarchical_counts as either:
+      - A simple number (cell count)
+      - A tuple of (cell_count, cell_density)
+      - A tuple of (cell_count, volume, cell_density)
     """
 
     def __init__(
@@ -565,7 +567,7 @@ class RegionTreeWidget(QWidget):
         anno_layer: Any,
         bg_tree: Any,
         bg_atlas: BrainGlobeAtlas,
-        hierarchical_counts: Dict[str, Union[int, Tuple[int, float]]],
+        hierarchical_counts: Dict[str, Union[int, Tuple]],
         dask_anno_gpu: da.Array,
         annotation_data_cpu: da.Array,
         viewer: napari.Viewer,
@@ -586,12 +588,16 @@ class RegionTreeWidget(QWidget):
         self.mapping = create_region_mapping(self.bg_atlas)
         self.df_points = df_points
 
-        # Determine whether cell density is available.
+        # Detect whether hierarchical_counts includes density and volume.
         self.include_density = False
+        self.include_volume = False
         if hierarchical_counts:
             sample_val = next(iter(hierarchical_counts.values()))
-            if isinstance(sample_val, tuple) and len(sample_val) >= 2:
-                self.include_density = True
+            if isinstance(sample_val, tuple):
+                if len(sample_val) >= 2:
+                    self.include_density = True
+                if len(sample_val) >= 3:
+                    self.include_volume = True
 
         self.initUI()
 
@@ -601,15 +607,16 @@ class RegionTreeWidget(QWidget):
         self.search_bar.setPlaceholderText("Search region or name...")
         self.search_bar.textChanged.connect(self.filter_tree)
         layout.addWidget(self.search_bar)
-
         self.tree_widget = QTreeWidget()
-        # Use a different header depending on whether density is provided.
-        if self.include_density:
+        # Set header labels depending on whether volume and density are available.
+        if self.include_volume:
+            self.tree_widget.setHeaderLabels(
+                ["Region", "Name", "Cell Count", "Volume(mm^3)", "Cell Density"])
+        elif self.include_density:
             self.tree_widget.setHeaderLabels(
                 ["Region", "Name", "Cell Count", "Cell Density"])
         else:
             self.tree_widget.setHeaderLabels(["Region", "Name", "Cell Count"])
-
         self.tree_widget.setSortingEnabled(True)
         self.tree_widget.setAlternatingRowColors(True)
         self.tree_widget.setStyleSheet(
@@ -636,7 +643,6 @@ class RegionTreeWidget(QWidget):
         self.populate_tree()
         self.tree_widget.itemDoubleClicked.connect(self.on_item_double_clicked)
         self.tree_widget.itemClicked.connect(self.on_item_clicked)
-
         button_layout = QHBoxLayout()
         self.reset_button = QPushButton("Show All Regions")
         self.reset_button.setStyleSheet(
@@ -654,7 +660,6 @@ class RegionTreeWidget(QWidget):
         )
         self.reset_button.clicked.connect(self.reset_filter)
         button_layout.addWidget(self.reset_button)
-
         self.export_button = QPushButton("Export Table")
         self.export_button.setStyleSheet(
             """
@@ -690,10 +695,22 @@ class RegionTreeWidget(QWidget):
             return value[0]
         return value if value is not None else 0
 
+    def get_region_volume(self, region_acronym: str) -> float:
+        # If volume is provided (tuple length >= 3), return it; otherwise, 0.
+        value = self.hierarchical_counts.get(region_acronym)
+        if isinstance(value, tuple) and self.include_volume:
+            return value[1]
+        return 0.0
+
     def get_region_density(self, region_acronym: str) -> float:
         value = self.hierarchical_counts.get(region_acronym)
-        if isinstance(value, tuple) and len(value) >= 2:
-            return value[1]
+        if isinstance(value, tuple):
+            if self.include_volume:
+                # Assume tuple is (count, volume, density)
+                return value[2]
+            elif len(value) >= 2:
+                # Assume tuple is (count, density)
+                return value[1]
         return 0.0
 
     def populate_tree(self) -> None:
@@ -708,13 +725,20 @@ class RegionTreeWidget(QWidget):
             region_id = str(root_node.identifier)
         region_display = self.get_region_display(pure_acronym, region_id)
         region_name = self.get_region_name(region_id)
-        region_count = self.get_region_count(pure_acronym)
-        # Depending on the flag, populate with or without density.
-        if self.include_density:
+        region_count = int(self.get_region_count(pure_acronym))
+
+        if self.include_volume:
+            region_volume = self.get_region_volume(pure_acronym)
             region_density = self.get_region_density(pure_acronym)
             root_item = QTreeWidgetItem(
                 [region_display, region_name, str(
-                    region_count), f"{region_density:.2f}"]
+                    region_count), f"{region_volume:.6f}", f"{region_density:.6f}"]
+            )
+        elif self.include_density:
+            region_density = self.get_region_density(pure_acronym)
+            root_item = QTreeWidgetItem(
+                [region_display, region_name, str(
+                    region_count), f"{region_density:.6f}"]
             )
         else:
             root_item = QTreeWidgetItem(
@@ -736,12 +760,19 @@ class RegionTreeWidget(QWidget):
                 region_id = str(child.identifier)
             region_display = self.get_region_display(pure_acronym, region_id)
             region_name = self.get_region_name(region_id)
-            region_count = self.get_region_count(pure_acronym)
-            if self.include_density:
+            region_count = int(self.get_region_count(pure_acronym))
+            if self.include_volume:
+                region_volume = self.get_region_volume(pure_acronym)
                 region_density = self.get_region_density(pure_acronym)
                 child_item = QTreeWidgetItem(
                     [region_display, region_name, str(
-                        region_count), f"{region_density:.2f}"]
+                        region_count), f"{region_volume:.6f}", f"{region_density:.6f}"]
+                )
+            elif self.include_density:
+                region_density = self.get_region_density(pure_acronym)
+                child_item = QTreeWidgetItem(
+                    [region_display, region_name, str(
+                        region_count), f"{region_density:.6f}"]
                 )
             else:
                 child_item = QTreeWidgetItem(

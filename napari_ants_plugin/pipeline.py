@@ -556,7 +556,7 @@ class ImageProcessingPipeline:
 
             hierarchical_counts = (
                 merged_df.set_index('region_acronym')[
-                    ['cell_count', 'cell_density']]
+                    ['cell_count', 'aggregated_volume_mm3', 'cell_density']]
                 .apply(tuple, axis=1)
                 .to_dict()
             )
