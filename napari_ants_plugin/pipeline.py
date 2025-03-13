@@ -553,6 +553,13 @@ class ImageProcessingPipeline:
 
             merged_df.to_csv(
                 self.cell_counts_by_region_volumes_csv, index=False)
+
+            hierarchical_counts = (
+                merged_df.set_index('region_acronym')[
+                    ['cell_count', 'cell_density']]
+                .apply(tuple, axis=1)
+                .to_dict()
+            )
         else:
             df_hierarchy.to_csv(
                 self.cell_counts_by_region_volumes_csv, index=False)
