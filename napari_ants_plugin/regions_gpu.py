@@ -468,28 +468,53 @@ def create_overlay_label(viewer: napari.Viewer) -> QLabel:
     return label
 
 
-def setup_mouse_move_callback(
-    viewer: napari.Viewer,
-    anno_layer: Any,
-    label: QLabel,
-    atlas: BrainGlobeAtlas,
-    group_counts: Dict[str, int]
-) -> None:
-    """
-    Setup a callback to update the overlay label when the mouse moves.
-    """
+def setup_mouse_move_callback(viewer: napari.Viewer,
+                              anno_layer: Any,
+                              label: QLabel,
+                              atlas: BrainGlobeAtlas,
+                              hierarchical_counts: Dict[str, Union[int, Tuple]]) -> None:
     @viewer.mouse_move_callbacks.append
     def update_cursor_info(viewer: napari.Viewer, event: Any) -> None:
         if in_layer(anno_layer, event.position):
             structure_id = anno_layer.get_value(event.position)
             acronym, structure_name = get_structure_info(structure_id, atlas)
             if acronym is not None:
-                count = count_points_in_region_hierarchical(
-                    group_counts, acronym, atlas)
-                text = (f"Structure: {acronym}\n"
-                        f"Name: {structure_name}\n"
-                        f"ID: {structure_id}\n"
-                        f"Cell count: {count}")
+                info = hierarchical_counts.get(acronym)
+                if info is None:
+                    # Fallback if region info is missing.
+                    text = (f"Structure: {acronym}\n"
+                            f"Name: {structure_name}\n"
+                            f"ID: {structure_id}")
+                else:
+                    # Depending on what type of info we got, build the text.
+                    if isinstance(info, tuple):
+                        if len(info) >= 3:
+                            count, volume, density = info
+                            text = (f"Structure: {acronym}\n"
+                                    f"Name: {structure_name}\n"
+                                    f"ID: {structure_id}\n"
+                                    f"Cell count: {count}\n"
+                                    f"Volume: {volume:.2f}\n"
+                                    f"Density: {density:.2f}")
+                        elif len(info) == 2:
+                            count, density = info
+                            text = (f"Structure: {acronym}\n"
+                                    f"Name: {structure_name}\n"
+                                    f"ID: {structure_id}\n"
+                                    f"Cell count: {count}\n"
+                                    f"Density: {density:.2f}")
+                        else:
+                            count = info[0]
+                            text = (f"Structure: {acronym}\n"
+                                    f"Name: {structure_name}\n"
+                                    f"ID: {structure_id}\n"
+                                    f"Cell count: {count}")
+                    else:
+                        # If it's just an int
+                        text = (f"Structure: {acronym}\n"
+                                f"Name: {structure_name}\n"
+                                f"ID: {structure_id}\n"
+                                f"Cell count: {info}")
             else:
                 text = ""
             label.setText(text)
@@ -1055,7 +1080,7 @@ def main() -> None:
     # On-hover overlay.
     overlay_label = create_overlay_label(viewer)
     setup_mouse_move_callback(
-        viewer, anno_layer, overlay_label, atlas, group_counts)
+        viewer, anno_layer, overlay_label, atlas, hierarchical_counts)
 
     # Add any points.
     add_points_layer(viewer, df_points)

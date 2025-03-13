@@ -589,7 +589,7 @@ class ImageProcessingPipeline:
             region_tree, name="Brain Structure Tree", area="right")
         overlay_label = create_overlay_label(viewer)
         setup_mouse_move_callback(
-            viewer, anno_layer, overlay_label, atlas, group_counts)
+            viewer, anno_layer, overlay_label, atlas, hierarchical_counts)
         add_points_layer(viewer, df_points)
         self.logger.info("Launching Napari event loop.")
         napari.run()
