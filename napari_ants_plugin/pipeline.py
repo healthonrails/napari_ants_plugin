@@ -147,6 +147,10 @@ class ImageProcessingPipeline:
             self.folders["results"],
             f"cell_counts_{signal_basename}_{self.config.atlas_name}.csv"
         )
+        self.cell_counts_by_region_volumes_csv = os.path.join(
+            self.folders["results"],
+            f"cell_counts_{signal_basename}_{self.config.atlas_name}_density.csv"
+        )
         self.cellfinder_detected_xml = os.path.join(
             self.folders["results"], f"detected_cells_{signal_basename}_cellfinder.xml")
         self.cellfinder_detected_csv = os.path.join(
@@ -537,7 +541,23 @@ class ImageProcessingPipeline:
 
         df_hierarchy = pd.DataFrame(list(hierarchical_counts.items()), columns=[
                                     'acronym', 'cell_count'])
-        df_hierarchy.to_csv(self.cell_counts_csv, index=False)
+        if check_file_exists(self.region_volumes_csv):
+            df_volumes = pd.read_csv(self.region_volumes_csv)
+            # Merge the two DataFrames on the region acronym.
+            merged_df = pd.merge(
+                df_volumes, df_hierarchy, left_on="region_acronym", right_on="acronym", how="outer")
+            # Drop the redundant acronym column.
+            merged_df = merged_df.drop(columns=["acronym"])
+            merged_df['cell_density'] = merged_df['cell_count'] / \
+                merged_df['aggregated_volume_mm3']
+
+            merged_df.to_csv(
+                self.cell_counts_by_region_volumes_csv, index=False)
+        else:
+            df_hierarchy.to_csv(
+                self.cell_counts_by_region_volumes_csv, index=False)
+            self.logger.info(
+                "Region volumes CSV not found; skipping cell density calculation.")
 
         if viewer is None:
             viewer = napari.Viewer()
