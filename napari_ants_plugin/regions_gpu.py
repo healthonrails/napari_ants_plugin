@@ -798,20 +798,33 @@ class RegionTreeWidget(QWidget):
             filter_item(self.tree_widget.topLevelItem(i))
 
     def export_table(self) -> None:
+        # Determine header based on available data
+        if self.include_volume:
+            header = ["Region", "Name", "Cell_Count",
+                      "Volume_mm3", "Cell_Density"]
+        elif self.include_density:
+            header = ["Region", "Name", "Cell_Count", "Cell_Density"]
+        else:
+            header = ["Region", "Name", "Cell_Count"]
+
         file_path, _ = QFileDialog.getSaveFileName(
             self, "Save Table to CSV", "", "CSV Files (*.csv);;All Files (*)")
         if not file_path:
             return
-        rows = [["Region", "Name", "Cell Count"]]
+
+        rows = [header]
 
         def traverse(item: QTreeWidgetItem) -> None:
-            if not item.isHidden():
-                rows.append([item.text(0), item.text(1), item.text(2)])
-                for i in range(item.childCount()):
-                    traverse(item.child(i))
+            # Get the number of columns from the header
+            num_cols = len(header)
+            row = [item.text(col) for col in range(num_cols)]
+            rows.append(row)
+            for i in range(item.childCount()):
+                traverse(item.child(i))
 
         for i in range(self.tree_widget.topLevelItemCount()):
             traverse(self.tree_widget.topLevelItem(i))
+
         with open(file_path, "w", newline="") as f:
             csv.writer(f).writerows(rows)
         logger.info(f"Exported table to {file_path}")
