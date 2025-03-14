@@ -6,6 +6,7 @@ This script uses Dask and CuPy to downsample a large 3D Zarr image so that its r
 matches a target shape computed from physical extents and a target atlas resolution.
 It performs out-of-core processing by converting each block to a GPU array via CuPy and using
 Dask's distributed processing.
+Automatically selects the appropriate Dask cluster based on the operating system.
 
 Usage:
     python downsample_gpu.py --input_zarr input.zarr --output_tif downsampled.tif --atlas_name allen_mouse_25um
@@ -28,11 +29,12 @@ import cupy as cp
 import zarr
 from brainglobe_atlasapi import BrainGlobeAtlas, show_atlases
 import brainglobe_space as bg
-import tiffile as tiff
-from dask_cuda import LocalCUDACluster
-from dask.distributed import Client
+import tifffile as tiff
 from cupyx.scipy.ndimage import zoom
 from tqdm import tqdm
+
+# Import Client from Dask distributed (used in both cases)
+from dask.distributed import Client
 
 
 def setup_logging(log_file="downsample_gpu.log"):
@@ -128,6 +130,26 @@ def downsample_z(xy_image, target_d, interpolation_order, logger):
     return downsampled
 
 
+def get_cluster(logger):
+    """
+    Create a Dask cluster. On Linux, use LocalCUDACluster from dask-cuda for GPU-accelerated scheduling;
+    on Windows, fallback to a standard LocalCluster.
+    """
+    if sys.platform.startswith("linux"):
+        try:
+            from dask_cuda import LocalCUDACluster
+            logger.info("Using dask-cuda LocalCUDACluster for GPU scheduling.")
+            return LocalCUDACluster()
+        except ImportError:
+            logger.warning(
+                "dask-cuda not found. Falling back to dask.distributed.LocalCluster.")
+    else:
+        logger.info("dask-cuda is not supported on this OS. Using dask.distributed.LocalCluster instead. "
+                    "For optimal GPU performance on Windows, consider using WSL2 with GPU support.")
+    from dask.distributed import LocalCluster
+    return LocalCluster()
+
+
 def downsample_zarr(input_zarr_path,
                     output_tiff_path,
                     input_voxel_size,
@@ -135,15 +157,14 @@ def downsample_zarr(input_zarr_path,
                     logger,
                     zarr_origin='ial',
                     interpolation_order=1,
-                    is_mapping_downsampled_to_atlas=False,
-                    ):
+                    is_mapping_downsampled_to_atlas=False):
     """
     Downsample a Zarr array to a target shape computed from physical extents and a desired atlas resolution.
     """
-    # Start the Dask GPU cluster.
-    cluster = LocalCUDACluster()
+    # Start the appropriate Dask cluster.
+    cluster = get_cluster(logger)
     client = Client(cluster)
-    logger.info("Dask GPU cluster started.")
+    logger.info("Dask cluster started.")
 
     # Load atlas reference image and get atlas resolution.
     reference_image = bg_atlas.reference
@@ -154,10 +175,8 @@ def downsample_zarr(input_zarr_path,
     target_voxel_size = bg_atlas.resolution
 
     # Ensure target_voxel_size is a scalar (assuming isotropic resolution).
-    if isinstance(target_voxel_size, (tuple, list, np.ndarray)):
-        atlas_res = target_voxel_size[0]
-    else:
-        atlas_res = target_voxel_size
+    atlas_res = target_voxel_size[0] if isinstance(
+        target_voxel_size, (tuple, list, np.ndarray)) else target_voxel_size
 
     # Load input Zarr array.
     logger.info("Loading input Zarr array...")
@@ -215,7 +234,7 @@ def downsample_zarr(input_zarr_path,
     # Shutdown the Dask cluster.
     client.close()
     cluster.close()
-    logger.info("Dask GPU cluster closed.")
+    logger.info("Dask cluster closed.")
 
 
 def main():
