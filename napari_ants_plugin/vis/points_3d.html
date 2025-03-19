@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>3D Brain Region Visualization - Region Search & Selection Tooltip</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+        }
+
+        canvas {
+            display: block;
+        }
+
+        /* File input stays in top left */
+        #fileInput {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 10;
+        }
+
+        /* Basic camera control buttons (top left) */
+        #controls {
+            position: absolute;
+            top: 10px;
+            left: 150px;
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #controls button {
+            margin: 5px 0;
+            padding: 8px 12px;
+            font-size: 14px;
+        }
+
+        /* Hover tooltip styling */
+        #tooltip {
+            position: absolute;
+            background: rgba(0, 0, 0, 0.7);
+            color: #fff;
+            padding: 4px 8px;
+            border-radius: 4px;
+            pointer-events: none;
+            font-size: 12px;
+            display: none;
+            z-index: 20;
+        }
+
+        /* Selected tooltip styling (persistent on click) */
+        #selectedTooltip {
+            position: absolute;
+            background: rgba(50, 50, 50, 0.9);
+            color: #ff0;
+            padding: 4px 8px;
+            border-radius: 4px;
+            pointer-events: none;
+            font-size: 12px;
+            display: none;
+            z-index: 21;
+        }
+
+        /* Legend styling */
+        #legend {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            background: rgba(255, 255, 255, 0.8);
+            padding: 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            z-index: 10;
+        }
+
+        #legend div {
+            margin-bottom: 5px;
+        }
+
+        #legend span.colorBox {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            margin-right: 5px;
+            vertical-align: middle;
+        }
+    </style>
+    <!-- Three.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three/examples/js/controls/OrbitControls.js"></script>
+    <!-- PapaParse for CSV parsing -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
+    <!-- dat.GUI for interactive controls -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.7/dat.gui.min.js"></script>
+</head>
+
+<body>
+    <input type="file" id="fileInput" accept=".csv" />
+    <!-- Camera Control Buttons -->
+    <div id="controls">
+        <button id="viewX">View from X-Axis</button>
+        <button id="viewY">View from Y-Axis</button>
+        <button id="viewZ">View from Z-Axis</button>
+        <button id="resetView">Reset View</button>
+        <button id="toggleAxes">Toggle Axes</button>
+    </div>
+    <!-- Hover Tooltip -->
+    <div id="tooltip"></div>
+    <!-- Selected Tooltip (persistent on click) -->
+    <div id="selectedTooltip"></div>
+    <!-- Legend -->
+    <div id="legend"></div>
+
+    <script>
+        // --- Scene Setup ---
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(
+            75, window.innerWidth / window.innerHeight, 0.1, 20000
+        );
+        camera.position.set(0, 0, 5000);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        document.body.appendChild(renderer.domElement);
+
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+
+        // --- Axes Helper ---
+        const axesHelper = new THREE.AxesHelper(1000);
+        scene.add(axesHelper);
+        let axesVisible = true;
+
+        // --- Global Data Arrays & Variables ---
+        let allPointsData = []; // stores objects: { x, y, z, region, regionFull }
+        let geometry = null;
+        let points = null;
+        let fullIndices = null;
+        let currentFilteredIndices = [];
+
+        // Mapping: region acronym -> THREE.Color
+        let globalColorMap = {};
+        // Mapping: region acronym -> boolean (true = show)
+        let regionVisibility = {};
+
+        // --- dat.GUI Controls for general properties & region controls ---
+        const guiParams = { pointSize: 10, opacity: 0.9, regionSearch: "" };
+        const gui = new dat.GUI();
+        gui.add(guiParams, 'pointSize', 1, 20).onChange(updateMaterial);
+        gui.add(guiParams, 'opacity', 0, 1).onChange(updateMaterial);
+
+        // --- Region search and select/deselect added after opacity ---
+        gui.add(guiParams, 'regionSearch').name("Search Regions").onChange((value) => {
+            regionSearchTerm = value;
+            setupRegionFilterGUI();
+        });
+
+        guiParams.selectAllRegions = function () {
+            for (const region in regionVisibility) {
+                regionVisibility[region] = true;
+            }
+            setupRegionFilterGUI();
+            updateFilteredPoints();
+        };
+        gui.add(guiParams, 'selectAllRegions').name("Select All Regions");
+
+        guiParams.deselectAllRegions = function () {
+            for (const region in regionVisibility) {
+                regionVisibility[region] = false;
+            }
+            setupRegionFilterGUI();
+            updateFilteredPoints();
+        };
+        gui.add(guiParams, 'deselectAllRegions').name("Deselect All Regions");
+
+        // --- Region Filter Folder (dynamically built) ---
+        let regionSearchTerm = "";
+        function setupRegionFilterGUI() {
+            // Remove the old folder if it exists
+            if (gui.__folders && gui.__folders["Region Filter"]) {
+                gui.removeFolder(gui.__folders["Region Filter"]);
+            }
+            const folder = gui.addFolder("Region Filter");
+            for (const region in regionVisibility) {
+                if (region.toLowerCase().includes(regionSearchTerm.toLowerCase())) {
+                    folder.add(regionVisibility, region).name(region).onChange(updateFilteredPoints);
+                }
+            }
+            folder.open();
+        }
+
+        // --- Legend ---
+        function updateLegend() {
+            const legendDiv = document.getElementById('legend');
+            legendDiv.innerHTML = "<strong>Region Legend</strong><br/>";
+            for (const region in globalColorMap) {
+                const hex = "#" + globalColorMap[region].getHexString();
+                const entry = document.createElement("div");
+                const colorBox = document.createElement("span");
+                colorBox.className = "colorBox";
+                colorBox.style.background = hex;
+                entry.appendChild(colorBox);
+                entry.appendChild(document.createTextNode(region + ": " + (regionVisibility[region] ? "Shown" : "Hidden")));
+                legendDiv.appendChild(entry);
+            }
+        }
+
+        // --- Texture Generation for Neuron-like Points ---
+        function generateNeuronTexture() {
+            const size = 64;
+            const canvas = document.createElement('canvas');
+            canvas.width = size;
+            canvas.height = size;
+            const context = canvas.getContext('2d');
+            const gradient = context.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+            gradient.addColorStop(0, 'rgba(255,255,255,1)');
+            gradient.addColorStop(0.3, 'rgba(200,200,200,1)');
+            gradient.addColorStop(1, 'rgba(0,0,0,0)');
+            context.fillStyle = gradient;
+            context.beginPath();
+            context.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
+            context.fill();
+            return new THREE.CanvasTexture(canvas);
+        }
+        const neuronTexture = generateNeuronTexture();
+
+        // --- Build Full Geometry (all points) ---
+        function buildFullGeometry() {
+            if (allPointsData.length === 0) return;
+            const n = allPointsData.length;
+            const positions = new Float32Array(n * 3);
+            const colors = new Float32Array(n * 3);
+            fullIndices = new Uint32Array(n);
+
+            for (let i = 0; i < n; i++) {
+                const pt = allPointsData[i];
+                positions[i * 3] = pt.x;
+                positions[i * 3 + 1] = pt.y;
+                positions[i * 3 + 2] = pt.z;
+                const col = globalColorMap[pt.region];
+                colors[i * 3] = col.r;
+                colors[i * 3 + 1] = col.g;
+                colors[i * 3 + 2] = col.b;
+                fullIndices[i] = i;
+            }
+
+            geometry = new THREE.BufferGeometry();
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+            // Initially, show all points.
+            geometry.setIndex(new THREE.BufferAttribute(fullIndices, 1));
+
+            const material = new THREE.PointsMaterial({
+                vertexColors: true,
+                size: guiParams.pointSize,
+                map: neuronTexture,
+                transparent: true,
+                alphaTest: 0.5,
+                depthTest: true,
+                sizeAttenuation: true,
+                opacity: guiParams.opacity
+            });
+
+            if (points) {
+                points.geometry.dispose();
+                points.material.dispose();
+                scene.remove(points);
+            }
+
+            points = new THREE.Points(geometry, material);
+            scene.add(points);
+
+            // Center view on the point cloud.
+            geometry.computeBoundingBox();
+            if (geometry.boundingBox) {
+                const center = new THREE.Vector3();
+                geometry.boundingBox.getCenter(center);
+                controls.target.copy(center);
+                controls.update();
+                const sizeVec = new THREE.Vector3();
+                geometry.boundingBox.getSize(sizeVec);
+                const maxDim = Math.max(sizeVec.x, sizeVec.y, sizeVec.z);
+                const distance = maxDim * 2;
+                camera.position.copy(center).add(new THREE.Vector3(0, 0, distance));
+                camera.updateProjectionMatrix();
+            }
+        }
+
+        // --- Update Material Properties ---
+        function updateMaterial() {
+            if (points && points.material) {
+                points.material.size = guiParams.pointSize;
+                points.material.opacity = guiParams.opacity;
+                points.material.needsUpdate = true;
+            }
+        }
+
+        // --- Update Filtered Points using the Index Buffer ---
+        function updateFilteredPoints() {
+            if (!geometry) return;
+            const filtered = [];
+            for (let i = 0; i < allPointsData.length; i++) {
+                const pt = allPointsData[i];
+                if (regionVisibility[pt.region]) {
+                    filtered.push(i);
+                }
+            }
+            currentFilteredIndices = filtered; // For tooltip mapping.
+            const indexArray = new Uint32Array(filtered);
+            geometry.setIndex(new THREE.BufferAttribute(indexArray, 1));
+            geometry.index.needsUpdate = true;
+            geometry.setDrawRange(0, filtered.length);
+            updateLegend();
+        }
+
+        // --- CSV Parsing ---
+        // Expected CSV header: z,y,x,group_id,region_acronym,region_name
+        function loadCSV(file) {
+            // Reset global arrays.
+            allPointsData = [];
+            globalColorMap = {};
+            regionVisibility = {};
+
+            Papa.parse(file, {
+                header: true,
+                skipEmptyLines: true,
+                worker: true,
+                complete: (results) => {
+                    const data = results.data;
+                    for (const row of data) {
+                        const z = parseFloat(row.z);
+                        const y = parseFloat(row.y);
+                        const x = parseFloat(row.x);
+                        const region = row.region_acronym;
+                        const regionFull = row.region_name;
+                        if (!region || region.trim() === "") continue;
+                        if (!isNaN(x) && !isNaN(y) && !isNaN(z)) {
+                            allPointsData.push({ x, y, z, region, regionFull });
+                            if (!globalColorMap[region]) {
+                                globalColorMap[region] = new THREE.Color(Math.random(), Math.random(), Math.random());
+                            }
+                            if (regionVisibility[region] === undefined) {
+                                regionVisibility[region] = true;
+                            }
+                        }
+                    }
+                    buildFullGeometry();
+                    setupRegionFilterGUI();
+                    updateFilteredPoints();
+                },
+                error: (error) => {
+                    console.error("Error parsing CSV:", error);
+                }
+            });
+        }
+
+        // --- File Input Listener ---
+        document.getElementById("fileInput").addEventListener("change", (event) => {
+            const file = event.target.files[0];
+            if (file) loadCSV(file);
+        });
+
+        // --- Camera Control Buttons ---
+        document.getElementById("viewX").addEventListener("click", () => {
+            camera.position.set(5000, 0, 0);
+            controls.target.set(0, 0, 0);
+            controls.update();
+        });
+        document.getElementById("viewY").addEventListener("click", () => {
+            camera.position.set(0, 5000, 0);
+            controls.target.set(0, 0, 0);
+            controls.update();
+        });
+        document.getElementById("viewZ").addEventListener("click", () => {
+            camera.position.set(0, 0, 5000);
+            controls.target.set(0, 0, 0);
+            controls.update();
+        });
+        document.getElementById("resetView").addEventListener("click", () => {
+            if (points && geometry) {
+                geometry.computeBoundingBox();
+                const center = new THREE.Vector3();
+                geometry.boundingBox.getCenter(center);
+                controls.target.copy(center);
+                const sizeVec = new THREE.Vector3();
+                geometry.boundingBox.getSize(sizeVec);
+                const maxDim = Math.max(sizeVec.x, sizeVec.y, sizeVec.z);
+                camera.position.copy(center).add(new THREE.Vector3(0, 0, maxDim * 2));
+            } else {
+                camera.position.set(0, 0, 5000);
+                controls.target.set(0, 0, 0);
+            }
+            controls.update();
+        });
+        document.getElementById("toggleAxes").addEventListener("click", () => {
+            axesVisible = !axesVisible;
+            axesHelper.visible = axesVisible;
+        });
+
+        // --- Raycaster & Tooltips ---
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+        const hoverTooltip = document.getElementById("tooltip");
+        const selectedTooltip = document.getElementById("selectedTooltip");
+        let selectedTimeout = null;
+
+        window.addEventListener("mousemove", (event) => {
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+            updateHoverTooltip(event);
+        });
+
+        function updateHoverTooltip(event) {
+            if (points) {
+                raycaster.setFromCamera(mouse, camera);
+                const intersects = raycaster.intersectObject(points);
+                if (intersects.length > 0) {
+                    let originalIndex = intersects[0].index;
+                    if (geometry.index) {
+                        originalIndex = geometry.index.array[intersects[0].index];
+                    }
+                    const pt = allPointsData[originalIndex];
+                    hoverTooltip.style.left = (event.clientX + 10) + "px";
+                    hoverTooltip.style.top = (event.clientY + 10) + "px";
+                    hoverTooltip.innerHTML = pt.region + ": " + pt.regionFull;
+                    hoverTooltip.style.display = "block";
+                } else {
+                    hoverTooltip.style.display = "none";
+                }
+            }
+        }
+
+        renderer.domElement.addEventListener("click", (event) => {
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObject(points);
+            if (intersects.length > 0) {
+                let originalIndex = intersects[0].index;
+                if (geometry.index) {
+                    originalIndex = geometry.index.array[intersects[0].index];
+                }
+                const pt = allPointsData[originalIndex];
+                selectedTooltip.style.left = (event.clientX + 10) + "px";
+                selectedTooltip.style.top = (event.clientY + 10) + "px";
+                selectedTooltip.innerHTML = pt.region + ": " + pt.regionFull;
+                selectedTooltip.style.display = "block";
+                if (selectedTimeout) clearTimeout(selectedTimeout);
+                selectedTimeout = setTimeout(() => {
+                    selectedTooltip.style.display = "none";
+                }, 3000);
+            }
+        });
+
+        // --- Animation Loop ---
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // --- Handle Window Resize ---
+        window.addEventListener("resize", () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+
+</html>
